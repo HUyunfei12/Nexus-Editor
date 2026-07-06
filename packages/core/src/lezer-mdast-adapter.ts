@@ -237,6 +237,7 @@ const MARKER_NODE_NAMES = new Set([
   "EmphasisMark",
   "CodeMark",
   "LinkMark",
+  "StrikethroughMark",
   "ListMark",
   "QuoteMark",
   "HeaderMark",

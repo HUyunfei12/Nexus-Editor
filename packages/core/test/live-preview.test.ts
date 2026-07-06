@@ -942,12 +942,12 @@ describe("live preview", () => {
     editor.destroy();
   });
 
-  it("renders inline bold/em/code inside table cells", () => {
+  it("renders inline bold/em/code/delete inside table cells", () => {
     const container = document.createElement("div");
     const editor = createEditor({
       container,
       initialValue:
-        "| Style | Sample |\n|---|---|\n| Bold | **strong** |\n| Italic | *em* |\n| Code | `code` |",
+        "| Style | Sample |\n|---|---|\n| Bold | **strong** |\n| Italic | *em* |\n| Code | `code` |\n| Delete | ~~removed~~ |",
       livePreview: true,
       plugins: [createGfmPreset()],
     });
@@ -955,6 +955,8 @@ describe("live preview", () => {
     expect(container.querySelector("table strong")?.textContent).toBe("strong");
     expect(container.querySelector("table em")?.textContent).toBe("em");
     expect(container.querySelector("table code")?.textContent).toBe("code");
+    expect(container.querySelector("table del")?.textContent).toBe("removed");
+    expect(container.querySelector("table")?.textContent).not.toContain("~~");
     editor.destroy();
   });
 
