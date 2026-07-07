@@ -159,6 +159,65 @@ function placeRawSourceCaret(td: HTMLElement, rawOffset: number): void {
   selection?.addRange(range);
 }
 
+function collectTextNodes(root: Node): Text[] {
+  const nodes: Text[] = [];
+  const visit = (node: Node): void => {
+    node.childNodes.forEach((child) => {
+      if (child.nodeType === Node.TEXT_NODE) {
+        nodes.push(child as Text);
+      } else {
+        visit(child);
+      }
+    });
+  };
+  visit(root);
+  return nodes;
+}
+
+function textPointForRawSourceOffset(cell: HTMLElement, rawOffset: number): { node: Text; offset: number } | null {
+  const textNodes = collectTextNodes(cell);
+  let sawMappedNode = false;
+  for (const text of textNodes) {
+    const mapped = renderedSourceOffsets.get(text);
+    if (!mapped) continue;
+    sawMappedNode = true;
+    if (rawOffset >= mapped.start && rawOffset <= mapped.end) {
+      return {
+        node: text,
+        offset: Math.max(0, Math.min(rawOffset - mapped.start, text.textContent?.length ?? 0)),
+      };
+    }
+  }
+
+  if (sawMappedNode) return null;
+
+  let remaining = Math.max(0, rawOffset);
+  for (const text of textNodes) {
+    const length = text.textContent?.length ?? 0;
+    if (remaining <= length) return { node: text, offset: remaining };
+    remaining -= length;
+  }
+  const last = textNodes[textNodes.length - 1];
+  return last ? { node: last, offset: last.textContent?.length ?? 0 } : null;
+}
+
+function selectRawSourceRange(td: HTMLElement, from: number, to: number): boolean {
+  if (from === to) return false;
+  const start = Math.min(from, to);
+  const end = Math.max(from, to);
+  const startPoint = textPointForRawSourceOffset(td, start);
+  const endPoint = textPointForRawSourceOffset(td, end);
+  if (!startPoint || !endPoint) return false;
+
+  const range = td.ownerDocument.createRange();
+  range.setStart(startPoint.node, startPoint.offset);
+  range.setEnd(endPoint.node, endPoint.offset);
+  const selection = td.ownerDocument.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  return true;
+}
+
 function extractCellText(cell: any): string {
   if (!cell || !("children" in cell) || !Array.isArray(cell.children)) return "";
   return cell.children
@@ -1499,30 +1558,68 @@ export class EditableTableWidget extends WidgetType {
             document.removeEventListener("mouseup", onCellMouseUp);
             cellMouseDown = false;
             isRangeSelecting = false;
+            const dragDistance = Math.hypot(ue.clientX - startX, ue.clientY - startY);
+            const rawSelectionEndOffset = rawSourceOffsetFromPoint(td, ue);
             if (
               !cellMouseMoved &&
-              Math.hypot(ue.clientX - startX, ue.clientY - startY) > TEXT_SELECTION_DRAG_THRESHOLD_PX
+              dragDistance > TEXT_SELECTION_DRAG_THRESHOLD_PX
             ) {
               cellTextSelectionDrag = true;
             }
 
+            const preserveRawDragSelection = (): boolean => {
+              if (
+                rawCaretOffset === null ||
+                rawSelectionEndOffset === null ||
+                rawCaretOffset === rawSelectionEndOffset
+              ) {
+                return false;
+              }
+              return selectRawSourceRange(td, rawCaretOffset, rawSelectionEndOffset);
+            };
+
+            const stabilizeNativeTextSelection = (): void => {
+              const ownerWindow = td.ownerDocument.defaultView ?? window;
+              ownerWindow.setTimeout(() => {
+                if (!td.isConnected) return;
+                preserveRawDragSelection();
+              }, 0);
+            };
+
+            const activateAfterNativeSelectionSettles = (): void => {
+              const run = (): void => {
+                if (!td.isConnected) return;
+                if (hasNativeTextSelectionInCell(td)) {
+                  return;
+                }
+                activateCellEditing();
+                if (rawCaretOffset !== null) {
+                  placeRawSourceCaret(td, rawCaretOffset);
+                  window.setTimeout(() => {
+                    if (td.contentEditable === "true") {
+                      placeRawSourceCaret(td, rawCaretOffset);
+                    }
+                  }, 0);
+                }
+              };
+              if (dragDistance > 0) {
+                const ownerWindow = td.ownerDocument.defaultView ?? window;
+                ownerWindow.setTimeout(run, 0);
+                return;
+              }
+              run();
+            };
+
             const range = getNormalizedRange();
             if (cellTextSelectionDrag || hasNativeTextSelectionInCell(td)) {
               clearRangeSelection();
+              stabilizeNativeTextSelection();
               return;
             }
             if (!cellMouseMoved || (range && range.r1 === range.r2 && range.c1 === range.c2)) {
               // Single cell click — activate editing
               clearRangeSelection();
-              activateCellEditing();
-              if (rawCaretOffset !== null) {
-                placeRawSourceCaret(td, rawCaretOffset);
-                window.setTimeout(() => {
-                  if (td.contentEditable === "true") {
-                    placeRawSourceCaret(td, rawCaretOffset);
-                  }
-                }, 0);
-              }
+              activateAfterNativeSelectionSettles();
             } else {
               // Multi-cell range selected — keep range visible, focus wrapper for key events
               rangeActive = true;

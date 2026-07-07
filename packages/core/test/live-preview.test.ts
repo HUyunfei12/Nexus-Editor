@@ -1070,6 +1070,68 @@ describe("live preview", () => {
     container.remove();
   });
 
+  it("preserves partial native text selection in a table cell after mouseup", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const editor = createEditor({
+      container,
+      initialValue: "| Creator | Segment |\n| --- | --- |\n| Kevin Stratvert | P1 |",
+      livePreview: true,
+      plugins: [createGfmPreset()]
+    });
+
+    const cell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    expect(cell).not.toBeUndefined();
+    const text = cell!.firstChild;
+    expect(text?.textContent).toBe("Kevin Stratvert");
+
+    const originalCaretRangeFromPoint = document.caretRangeFromPoint;
+    Object.defineProperty(document, "caretRangeFromPoint", {
+      configurable: true,
+      value: (x: number) => {
+        const range = document.createRange();
+        range.setStart(text!, x < 30 ? 0 : 5);
+        range.collapse(true);
+        return range;
+      },
+    });
+
+    cell?.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 12,
+      clientY: 15
+    }));
+    document.dispatchEvent(new MouseEvent("mousemove", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 72,
+      clientY: 15
+    }));
+    document.dispatchEvent(new MouseEvent("mouseup", {
+      bubbles: true,
+      button: 0,
+      clientX: 72,
+      clientY: 15
+    }));
+
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(cell?.contentEditable).not.toBe("true");
+    expect(document.getSelection()?.toString()).toBe("Kevin");
+    expect(document.getSelection()?.toString()).not.toBe("Kevin Stratvert");
+
+    Object.defineProperty(document, "caretRangeFromPoint", {
+      configurable: true,
+      value: originalCaretRangeFromPoint,
+    });
+    document.getSelection()?.removeAllRanges();
+    editor.destroy();
+    container.remove();
+  });
+
   it("keeps same-cell drags from activating whole-cell editing when hit testing misses", () => {
     document.getSelection()?.removeAllRanges();
     const container = document.createElement("div");
