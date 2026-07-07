@@ -415,6 +415,15 @@ const SELECT_BG = "rgba(124, 108, 250, 0.12)";
 const SELECT_BORDER = "var(--nexus-accent)";
 const DRAG_HIGHLIGHT_BG = "rgba(124, 108, 250, 0.08)";
 const TEXT_SELECTION_DRAG_THRESHOLD_PX = 3;
+const NATIVE_TEXT_SELECTION_RESTORE_WINDOW_MS = 220;
+
+interface PendingNativeTextSelection {
+  cell: HTMLElement;
+  from: number;
+  to: number;
+  expectedText: string;
+  expiresAt: number;
+}
 
 export class EditableTableWidget extends WidgetType {
   private editing = false;
@@ -548,10 +557,15 @@ export class EditableTableWidget extends WidgetType {
       focus: false,
       range: false,
       drag: false,
+      nativeSelection: false,
     };
+    let pendingNativeTextSelection: PendingNativeTextSelection | null = null;
+    let pendingNativeTextSelectionTimer: number | null = null;
+    let pendingNativeTextSelectionTimerWindow: Window | null = null;
+    let selectionChangeDocument: Document | null = null;
 
     function hasEditingLocks(): boolean {
-      return editingLocks.focus || editingLocks.range || editingLocks.drag;
+      return editingLocks.focus || editingLocks.range || editingLocks.drag || editingLocks.nativeSelection;
     }
 
     function acquireEditingLock(lock: keyof typeof editingLocks): void {
@@ -572,6 +586,11 @@ export class EditableTableWidget extends WidgetType {
       releaseEditingLock("focus");
       releaseEditingLock("range");
       releaseEditingLock("drag");
+      clearPendingNativeTextSelection();
+      if (selectionChangeDocument) {
+        selectionChangeDocument.removeEventListener("selectionchange", onDocumentSelectionChange);
+        selectionChangeDocument = null;
+      }
     };
 
     const rememberDirtyRow = (lineIdx: number | undefined, row: HTMLElement): void => {
@@ -691,6 +710,8 @@ export class EditableTableWidget extends WidgetType {
     // untracked height per table → cumulative click-drift below every table.
     wrapper.style.cssText =
       "display:inline-block;position:relative;padding:8px 0;user-select:text;-webkit-user-select:text;";
+    selectionChangeDocument = wrapper.ownerDocument;
+    selectionChangeDocument.addEventListener("selectionchange", onDocumentSelectionChange);
 
     // ── Table ──
     const table = document.createElement("table");
@@ -959,6 +980,117 @@ export class EditableTableWidget extends WidgetType {
 
     function clearNativeTextSelection(): void {
       table.ownerDocument.getSelection()?.removeAllRanges();
+    }
+
+    function clearPendingNativeTextSelection(): void {
+      if (pendingNativeTextSelectionTimer !== null && pendingNativeTextSelectionTimerWindow) {
+        pendingNativeTextSelectionTimerWindow.clearTimeout(pendingNativeTextSelectionTimer);
+      }
+      pendingNativeTextSelectionTimer = null;
+      pendingNativeTextSelectionTimerWindow = null;
+      pendingNativeTextSelection = null;
+      releaseEditingLock("nativeSelection");
+    }
+
+    function selectionTouchesCell(range: Range, cell: HTMLElement): boolean {
+      return (
+        range.startContainer === cell ||
+        range.endContainer === cell ||
+        cell.contains(range.startContainer) ||
+        cell.contains(range.endContainer) ||
+        cell.contains(range.commonAncestorContainer)
+      );
+    }
+
+    function selectionMatchesRawSourceRange(cell: HTMLElement, from: number, to: number): boolean {
+      const selection = cell.ownerDocument.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
+      const range = selection.getRangeAt(0);
+      if (!selectionTouchesCell(range, cell)) return false;
+      const actualFrom = rawSourceOffsetFromCaret(range.startContainer, range.startOffset);
+      const actualTo = rawSourceOffsetFromCaret(range.endContainer, range.endOffset);
+      if (actualFrom === null || actualTo === null) return false;
+      return Math.min(actualFrom, actualTo) === from && Math.max(actualFrom, actualTo) === to;
+    }
+
+    function rawSourceRangeFromNativeSelection(cell: HTMLElement): { from: number; to: number } | null {
+      const selection = cell.ownerDocument.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+      const range = selection.getRangeAt(0);
+      if (!selectionTouchesCell(range, cell)) return null;
+      const from = rawSourceOffsetFromCaret(range.startContainer, range.startOffset);
+      const to = rawSourceOffsetFromCaret(range.endContainer, range.endOffset);
+      if (from === null || to === null || from === to) return null;
+      return { from: Math.min(from, to), to: Math.max(from, to) };
+    }
+
+    function restorePendingNativeTextSelection(): void {
+      const pending = pendingNativeTextSelection;
+      if (!pending) return;
+      if (!pending.cell.isConnected || Date.now() > pending.expiresAt) {
+        clearPendingNativeTextSelection();
+        return;
+      }
+      if (selectionMatchesRawSourceRange(pending.cell, pending.from, pending.to)) return;
+
+      const selection = pending.cell.ownerDocument.getSelection();
+      let shouldRestore = !selection || selection.rangeCount === 0 || selection.isCollapsed;
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        if (!selectionTouchesCell(range, pending.cell)) {
+          return;
+        }
+        const selectedText = selection.toString();
+        const cellText = pending.cell.textContent ?? "";
+        shouldRestore =
+          shouldRestore ||
+          selectedText !== pending.expectedText ||
+          (cellText !== "" && selectedText === cellText && pending.expectedText !== cellText);
+      }
+
+      if (!shouldRestore) return;
+      selectRawSourceRange(pending.cell, pending.from, pending.to);
+    }
+
+    function armPendingNativeTextSelection(cell: HTMLElement, from: number, to: number): boolean {
+      if (from === to) return false;
+      const start = Math.min(from, to);
+      const end = Math.max(from, to);
+      const sourceText = cell.dataset.source ?? cell.textContent ?? "";
+      const ownerWindow = cell.ownerDocument.defaultView ?? window;
+      if (pendingNativeTextSelectionTimer !== null && pendingNativeTextSelectionTimerWindow) {
+        pendingNativeTextSelectionTimerWindow.clearTimeout(pendingNativeTextSelectionTimer);
+      }
+      pendingNativeTextSelection = {
+        cell,
+        from: start,
+        to: end,
+        expectedText: sourceText.slice(start, end),
+        expiresAt: Date.now() + NATIVE_TEXT_SELECTION_RESTORE_WINDOW_MS,
+      };
+      acquireEditingLock("nativeSelection");
+      pendingNativeTextSelectionTimerWindow = ownerWindow;
+      pendingNativeTextSelectionTimer = ownerWindow.setTimeout(
+        clearPendingNativeTextSelection,
+        NATIVE_TEXT_SELECTION_RESTORE_WINDOW_MS
+      );
+      return true;
+    }
+
+    function scheduleNativeTextSelectionRestoreChecks(cell: HTMLElement): void {
+      const ownerWindow = cell.ownerDocument.defaultView ?? window;
+      const restore = (): void => {
+        if (!cell.isConnected) return;
+        restorePendingNativeTextSelection();
+      };
+      ownerWindow.setTimeout(restore, 0);
+      ownerWindow.requestAnimationFrame?.(restore);
+      ownerWindow.setTimeout(restore, 32);
+      ownerWindow.setTimeout(restore, 96);
+    }
+
+    function onDocumentSelectionChange(): void {
+      restorePendingNativeTextSelection();
     }
 
     function serializeRangeSelection(range: { r1: number; c1: number; r2: number; c2: number }): string {
@@ -1529,6 +1661,7 @@ export class EditableTableWidget extends WidgetType {
           const startY = e.clientY;
           cellMouseMoved = false;
           cellTextSelectionDrag = false;
+          clearPendingNativeTextSelection();
           clearSelection();
 
           // Prepare range selection but don't render until mouse moves to a different cell
@@ -1579,7 +1712,42 @@ export class EditableTableWidget extends WidgetType {
             };
 
             const stabilizeNativeTextSelection = (): void => {
+              const armRange = (range: { from: number; to: number }): void => {
+                armPendingNativeTextSelection(td, range.from, range.to);
+                scheduleNativeTextSelectionRestoreChecks(td);
+              };
+              const hitTestRange =
+                rawCaretOffset !== null &&
+                rawSelectionEndOffset !== null &&
+                rawCaretOffset !== rawSelectionEndOffset
+                  ? {
+                      from: Math.min(rawCaretOffset, rawSelectionEndOffset),
+                      to: Math.max(rawCaretOffset, rawSelectionEndOffset),
+                    }
+                  : null;
+              const currentNativeRange = rawSourceRangeFromNativeSelection(td) ?? hitTestRange;
+              if (currentNativeRange) {
+                armRange(currentNativeRange);
+                return;
+              }
+
               const ownerWindow = td.ownerDocument.defaultView ?? window;
+              if (
+                rawCaretOffset === null ||
+                rawSelectionEndOffset === null ||
+                rawCaretOffset === rawSelectionEndOffset
+              ) {
+                ownerWindow.setTimeout(() => {
+                  if (!td.isConnected) return;
+                  const deferredNativeRange = rawSourceRangeFromNativeSelection(td);
+                  if (deferredNativeRange) {
+                    armRange(deferredNativeRange);
+                    return;
+                  }
+                  preserveRawDragSelection();
+                }, 0);
+                return;
+              }
               ownerWindow.setTimeout(() => {
                 if (!td.isConnected) return;
                 preserveRawDragSelection();
@@ -1896,6 +2064,7 @@ export class EditableTableWidget extends WidgetType {
     const onDocMouseDown = (e: MouseEvent): void => {
       if (!wrapper.isConnected) { document.removeEventListener("mousedown", onDocMouseDown); return; }
       if (!wrapper.contains(e.target as Node)) {
+        clearPendingNativeTextSelection();
         clearSelection();
         clearRangeSelection();
       }

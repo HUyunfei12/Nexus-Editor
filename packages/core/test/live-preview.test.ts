@@ -1118,6 +1118,14 @@ describe("live preview", () => {
     }));
 
     await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(document.getSelection()?.toString()).toBe("Kevin");
+
+    const wholeCellRange = document.createRange();
+    wholeCellRange.setStart(cell!, 0);
+    wholeCellRange.setEnd(cell!, cell!.childNodes.length);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(wholeCellRange);
+    document.dispatchEvent(new Event("selectionchange"));
 
     expect(cell?.contentEditable).not.toBe("true");
     expect(document.getSelection()?.toString()).toBe("Kevin");
@@ -1130,6 +1138,85 @@ describe("live preview", () => {
     document.getSelection()?.removeAllRanges();
     editor.destroy();
     container.remove();
+  });
+
+  it("restores partial table cell text selection when caret hit testing misses", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const editor = createEditor({
+      container,
+      initialValue: "| Creator | Segment |\n| --- | --- |\n| Kevin Stratvert | P1 |",
+      livePreview: true,
+      plugins: [createGfmPreset()]
+    });
+
+    const cell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    expect(cell).not.toBeUndefined();
+    const text = cell!.firstChild;
+    expect(text?.textContent).toBe("Kevin Stratvert");
+
+    const originalCaretRangeFromPoint = document.caretRangeFromPoint;
+    Object.defineProperty(document, "caretRangeFromPoint", {
+      configurable: true,
+      value: () => null,
+    });
+
+    cell?.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 12,
+      clientY: 15
+    }));
+    document.dispatchEvent(new MouseEvent("mousemove", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 72,
+      clientY: 15
+    }));
+
+    const partialRange = document.createRange();
+    partialRange.setStart(text!, 0);
+    partialRange.setEnd(text!, 5);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(partialRange);
+
+    document.dispatchEvent(new MouseEvent("mouseup", {
+      bubbles: true,
+      button: 0,
+      clientX: 72,
+      clientY: 15
+    }));
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    const outside = document.createElement("span");
+    outside.textContent = "outside";
+    document.body.appendChild(outside);
+    const outsideRange = document.createRange();
+    outsideRange.setStart(outside.firstChild!, 0);
+    outsideRange.setEnd(outside.firstChild!, 3);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(outsideRange);
+    document.dispatchEvent(new Event("selectionchange"));
+
+    const wholeCellRange = document.createRange();
+    wholeCellRange.setStart(cell!, 0);
+    wholeCellRange.setEnd(cell!, cell!.childNodes.length);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(wholeCellRange);
+    document.dispatchEvent(new Event("selectionchange"));
+
+    expect(document.getSelection()?.toString()).toBe("Kevin");
+
+    Object.defineProperty(document, "caretRangeFromPoint", {
+      configurable: true,
+      value: originalCaretRangeFromPoint,
+    });
+    document.getSelection()?.removeAllRanges();
+    editor.destroy();
+    container.remove();
+    outside.remove();
   });
 
   it("keeps same-cell drags from activating whole-cell editing when hit testing misses", () => {
