@@ -1210,6 +1210,8 @@ export class EditableTableWidget extends WidgetType {
           }
         }
         td.dataset.source = rawSource;
+        td.dataset.sourceFrom = String(self.tableFrom + rawSourceStart);
+        td.dataset.sourceTo = String(self.tableFrom + rawSourceStart + rawSource.length);
         if (astCell && Array.isArray(astCell.children) && astCell.children.length > 0) {
           renderCellRich(td, astCell, self.tableFrom, rawSourceStart);
         } else {
@@ -1288,6 +1290,7 @@ export class EditableTableWidget extends WidgetType {
         };
 
         const activateCellEditing = (): void => {
+          acquireEditingLock("focus");
           if (td.contentEditable !== "true") {
             td.contentEditable = "true";
           }
@@ -1325,15 +1328,21 @@ export class EditableTableWidget extends WidgetType {
               renderRangeSelection();
               return;
             }
-            if (target && Math.hypot(me.clientX - startX, me.clientY - startY) > TEXT_SELECTION_DRAG_THRESHOLD_PX) {
+            if (Math.hypot(me.clientX - startX, me.clientY - startY) > TEXT_SELECTION_DRAG_THRESHOLD_PX) {
               cellTextSelectionDrag = true;
             }
           };
-          const onCellMouseUp = (): void => {
+          const onCellMouseUp = (ue: MouseEvent): void => {
             document.removeEventListener("mousemove", onCellMouseMove);
             document.removeEventListener("mouseup", onCellMouseUp);
             cellMouseDown = false;
             isRangeSelecting = false;
+            if (
+              !cellMouseMoved &&
+              Math.hypot(ue.clientX - startX, ue.clientY - startY) > TEXT_SELECTION_DRAG_THRESHOLD_PX
+            ) {
+              cellTextSelectionDrag = true;
+            }
 
             const range = getNormalizedRange();
             if (cellTextSelectionDrag || hasNativeTextSelectionInCell(td)) {

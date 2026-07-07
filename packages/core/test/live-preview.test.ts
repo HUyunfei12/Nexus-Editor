@@ -623,6 +623,47 @@ describe("live preview", () => {
     container.remove();
   });
 
+  it("keeps the focused table cell DOM stable while typing", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const editor = createEditor({
+      container,
+      initialValue: "| A | B |\n| --- | --- |\n| 1 | 222 |",
+      livePreview: true,
+      plugins: [createGfmPreset()]
+    });
+
+    const cell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[1];
+    expect(cell).not.toBeUndefined();
+
+    cell?.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 80,
+      clientY: 40
+    }));
+    document.dispatchEvent(new MouseEvent("mouseup", {
+      bubbles: true,
+      button: 0,
+      clientX: 80,
+      clientY: 40
+    }));
+
+    expect(cell?.contentEditable).toBe("true");
+    cell!.textContent = "223";
+    cell!.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
+
+    const currentCell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[1];
+    expect(cell?.isConnected).toBe(true);
+    expect(currentCell).toBe(cell);
+    expect(cell?.contentEditable).toBe("true");
+    expect(editor.getDocument()).toContain("| 1 | 223 |");
+
+    editor.destroy();
+    container.remove();
+  });
+
   it("moves between table cells with up/down arrow keys", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
@@ -862,6 +903,48 @@ describe("live preview", () => {
     expect(cell?.contentEditable).not.toBe("true");
     expect(document.getSelection()?.toString()).toBe("Alpha");
     document.getSelection()?.removeAllRanges();
+    editor.destroy();
+    container.remove();
+  });
+
+  it("keeps same-cell drags from activating whole-cell editing when hit testing misses", () => {
+    document.getSelection()?.removeAllRanges();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const editor = createEditor({
+      container,
+      initialValue: "| A | B |\n| --- | --- |\n| Floatboat | 2 |",
+      livePreview: true,
+      plugins: [createGfmPreset()]
+    });
+
+    const cell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    expect(cell).not.toBeUndefined();
+
+    cell?.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 12,
+      clientY: 15
+    }));
+    document.dispatchEvent(new MouseEvent("mousemove", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 72,
+      clientY: 15
+    }));
+    document.dispatchEvent(new MouseEvent("mouseup", {
+      bubbles: true,
+      button: 0,
+      clientX: 72,
+      clientY: 15
+    }));
+
+    expect(cell?.contentEditable).not.toBe("true");
+    expect(cell?.style.background).not.toContain("124, 108, 250");
+
     editor.destroy();
     container.remove();
   });
