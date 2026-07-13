@@ -3,10 +3,74 @@ import type { Table } from "mdast";
 
 import type { LivePreviewLabels } from "./types";
 
-let tableEditingCount = 0;
+const tableEditingCounts = new WeakMap<EditorView, number>();
 
-export function isTableEditing(): boolean {
-  return tableEditingCount > 0;
+export function isTableEditing(view: EditorView | null | undefined): boolean {
+  return !!view && (tableEditingCounts.get(view) ?? 0) > 0;
+}
+
+function incrementTableEditing(view: EditorView): void {
+  tableEditingCounts.set(view, (tableEditingCounts.get(view) ?? 0) + 1);
+}
+
+function decrementTableEditing(view: EditorView): void {
+  const next = Math.max(0, (tableEditingCounts.get(view) ?? 0) - 1);
+  if (next === 0) tableEditingCounts.delete(view);
+  else tableEditingCounts.set(view, next);
+}
+
+interface TableEditSession {
+  flush(): boolean;
+  finish(): void;
+}
+
+const tableEditSessions = new WeakMap<EditorView, Set<TableEditSession>>();
+
+function registerTableEditSession(view: EditorView, session: TableEditSession): void {
+  let sessions = tableEditSessions.get(view);
+  if (!sessions) {
+    sessions = new Set();
+    tableEditSessions.set(view, sessions);
+  }
+  sessions.add(session);
+}
+
+function unregisterTableEditSession(view: EditorView, session: TableEditSession): void {
+  const sessions = tableEditSessions.get(view);
+  if (!sessions) return;
+  sessions.delete(session);
+  if (sessions.size === 0) tableEditSessions.delete(view);
+}
+
+export function flushPendingTableEdits(view: EditorView, finishEditing = false): boolean {
+  const sessions = Array.from(tableEditSessions.get(view) ?? []);
+  let changed = false;
+  let firstError: unknown;
+  let hasError = false;
+  for (const session of sessions) {
+    try {
+      changed = session.flush() || changed;
+    } catch (error) {
+      if (!hasError) {
+        firstError = error;
+        hasError = true;
+      }
+    }
+  }
+  if (finishEditing) {
+    for (const session of sessions) {
+      try {
+        session.finish();
+      } catch (error) {
+        if (!hasError) {
+          firstError = error;
+          hasError = true;
+        }
+      }
+    }
+  }
+  if (hasError) throw firstError;
+  return changed;
 }
 
 // 表格方向键导航的调试日志，仅在显式开启 floatboat:markdown-debug 标记后输出。
@@ -67,24 +131,54 @@ function lineStartOffset(lines: string[], lineIdx: number, tableFrom: number): n
 function sourceOffsetForCell(lines: string[], lineIdx: number, colIdx: number, tableFrom: number): number {
   const line = lines[lineIdx] ?? "";
   const lineStart = lineStartOffset(lines, lineIdx, tableFrom);
-  let pipeCount = 0;
+  const separators: number[] = [];
   for (let i = 0; i < line.length; i++) {
     if (line[i] !== "|") continue;
-    if (pipeCount === colIdx) {
-      let offset = i + 1;
-      while (offset < line.length && /\s/.test(line[offset]) && line[offset] !== "|") offset++;
-      return lineStart + offset;
-    }
-    pipeCount++;
+    let backslashes = 0;
+    for (let j = i - 1; j >= 0 && line[j] === "\\"; j--) backslashes++;
+    if (backslashes % 2 === 0) separators.push(i);
   }
-  return lineStart;
+
+  const cells: Array<{ from: number; to: number }> = [];
+  let from = 0;
+  let separatorIdx = 0;
+  if (separators.length > 0 && line.slice(0, separators[0]).trim() === "") {
+    from = separators[0] + 1;
+    separatorIdx = 1;
+  }
+  for (; separatorIdx < separators.length; separatorIdx++) {
+    const separator = separators[separatorIdx];
+    cells.push({ from, to: separator });
+    from = separator + 1;
+  }
+  const lastSeparator = separators[separators.length - 1];
+  if (lastSeparator === undefined || line.slice(lastSeparator + 1).trim() !== "") {
+    cells.push({ from, to: line.length });
+  }
+
+  const cell = cells[colIdx];
+  if (!cell) return lineStart;
+  let contentFrom = cell.from;
+  while (contentFrom < cell.to && /\s/.test(line[contentFrom])) contentFrom++;
+  return lineStart + contentFrom;
 }
 
-function getNodeSourceOffsets(node: any, tableFrom: number, rawSourceStart: number, inlineCode = false): { start: number; end: number } | null {
+function getNodeSourceOffsets(
+  node: any,
+  tableFrom: number,
+  rawSourceStart: number,
+  inlineCodeValue?: string
+): { start: number; end: number } | null {
   const startOffset = node?.position?.start?.offset;
   const endOffset = node?.position?.end?.offset;
   if (typeof startOffset !== "number" || typeof endOffset !== "number") return null;
-  const markerOffset = inlineCode ? 1 : 0;
+  let markerOffset = 0;
+  if (inlineCodeValue !== undefined) {
+    const markerCharacters = endOffset - startOffset - inlineCodeValue.length;
+    if (markerCharacters >= 2 && markerCharacters % 2 === 0) {
+      markerOffset = markerCharacters / 2;
+    }
+  }
   return {
     start: startOffset - tableFrom - rawSourceStart + markerOffset,
     end: endOffset - tableFrom - rawSourceStart - markerOffset,
@@ -172,6 +266,41 @@ function collectTextNodes(root: Node): Text[] {
   };
   visit(root);
   return nodes;
+}
+
+interface RenderedSourceSegment {
+  renderedFrom: number;
+  renderedTo: number;
+  sourceFrom: number;
+  sourceTo: number;
+}
+
+function writeRenderedSourceMap(cell: HTMLElement): void {
+  const segments: RenderedSourceSegment[] = [];
+  let renderedFrom = 0;
+  for (const text of collectTextNodes(cell)) {
+    const length = text.textContent?.length ?? 0;
+    const source = renderedSourceOffsets.get(text);
+    if (source && length > 0) {
+      segments.push({
+        renderedFrom,
+        renderedTo: renderedFrom + length,
+        sourceFrom: source.start,
+        sourceTo: source.end,
+      });
+    }
+    renderedFrom += length;
+  }
+  cell.dataset.renderedSourceMap = JSON.stringify(segments);
+}
+
+function writePlainSourceMap(cell: HTMLElement, length: number): void {
+  cell.dataset.renderedSourceMap = JSON.stringify(length > 0 ? [{
+    renderedFrom: 0,
+    renderedTo: length,
+    sourceFrom: 0,
+    sourceTo: length,
+  }] : []);
 }
 
 function textPointForRawSourceOffset(cell: HTMLElement, rawOffset: number): { node: Text; offset: number } | null {
@@ -338,8 +467,9 @@ function renderInlineMdast(node: any, mediaOnly = false, tableFrom = 0, rawSourc
     }
     case "inlineCode": {
       const el = document.createElement("code");
-      const text = document.createTextNode(typeof node.value === "string" ? node.value : "");
-      const sourceOffsets = getNodeSourceOffsets(node, tableFrom, rawSourceStart, true);
+      const value = typeof node.value === "string" ? node.value : "";
+      const text = document.createTextNode(value);
+      const sourceOffsets = getNodeSourceOffsets(node, tableFrom, rawSourceStart, value);
       if (sourceOffsets) renderedSourceOffsets.set(text, sourceOffsets);
       el.appendChild(text);
       el.style.cssText =
@@ -404,9 +534,13 @@ function renderInlineMdast(node: any, mediaOnly = false, tableFrom = 0, rawSourc
 
 function renderCellRich(td: HTMLElement, astCell: any, tableFrom = 0, rawSourceStart = 0): void {
   td.textContent = "";
-  if (!astCell || !Array.isArray(astCell.children)) return;
+  if (!astCell || !Array.isArray(astCell.children)) {
+    writeRenderedSourceMap(td);
+    return;
+  }
   const mediaOnly = isCellMediaOnly(astCell);
   for (const child of astCell.children) td.appendChild(renderInlineMdast(child, mediaOnly, tableFrom, rawSourceStart));
+  writeRenderedSourceMap(td);
 }
 
 const GRIP_BG = "var(--nexus-bg-muted)";
@@ -427,6 +561,7 @@ interface PendingNativeTextSelection {
 
 export class EditableTableWidget extends WidgetType {
   private editing = false;
+  private reusable = true;
   private cleanupEditingLocks: (() => void) | null = null;
 
   constructor(
@@ -439,7 +574,8 @@ export class EditableTableWidget extends WidgetType {
 
   eq(other: EditableTableWidget): boolean {
     if (this.editing) return true;
-    return this.source === other.source;
+    if (!this.reusable) return false;
+    return this.tableFrom === other.tableFrom && this.source === other.source;
   }
 
   ignoreEvent(): boolean { return true; }
@@ -458,6 +594,10 @@ export class EditableTableWidget extends WidgetType {
   private dispatch(newSource: string): void {
     const v = this.viewRef.current;
     if (!v) return;
+    const tableEnd = this.tableFrom + this.source.length;
+    if (tableEnd > v.state.doc.length || v.state.doc.sliceString(this.tableFrom, tableEnd) !== this.source) {
+      return;
+    }
     v.dispatch({ changes: { from: this.tableFrom, to: this.tableFrom + this.source.length, insert: newSource } });
   }
 
@@ -496,8 +636,8 @@ export class EditableTableWidget extends WidgetType {
     v.dispatch({ changes: { from: this.tableFrom + this.source.length, insert: nr } });
   }
 
-  private moveColumn(from: number, to: number): void {
-    const lines = this.source.split("\n");
+  private moveColumn(from: number, to: number, source = this.source): void {
+    const lines = source.split("\n");
     const nl = lines.map((line) => {
       const p = line.split("|"), cells = p.slice(1, -1);
       if (from >= cells.length || to >= cells.length) return line;
@@ -508,8 +648,8 @@ export class EditableTableWidget extends WidgetType {
     this.dispatch(nl.join("\n"));
   }
 
-  private moveRow(from: number, to: number): void {
-    const lines = this.source.split("\n");
+  private moveRow(from: number, to: number, source = this.source): void {
+    const lines = source.split("\n");
     const dl: number[] = [];
     for (let i = 0; i < lines.length; i++) if (!SEPARATOR_RE.test(lines[i])) dl.push(i);
     const s = dl[from], d = dl[to];
@@ -559,44 +699,86 @@ export class EditableTableWidget extends WidgetType {
       drag: false,
       nativeSelection: false,
     };
+    const editingLockViews: Partial<Record<keyof typeof editingLocks, EditorView>> = {};
     let pendingNativeTextSelection: PendingNativeTextSelection | null = null;
     let pendingNativeTextSelectionTimer: number | null = null;
     let pendingNativeTextSelectionTimerWindow: Window | null = null;
     let selectionChangeDocument: Document | null = null;
+    let registeredSessionView: EditorView | null = null;
+    let sessionClosed = false;
+
+    const tableEditSession: TableEditSession = {
+      flush: () => syncDirtyRowsToDocument(),
+      finish: () => {
+        self.reusable = false;
+        self.cleanupEditingLocks?.();
+      },
+    };
 
     function hasEditingLocks(): boolean {
       return editingLocks.focus || editingLocks.range || editingLocks.drag || editingLocks.nativeSelection;
+    }
+
+    function updateSessionRegistration(): void {
+      const view = self.viewRef.current;
+      const shouldRegister = !sessionClosed && (dirtyRows.size > 0 || hasEditingLocks());
+      if (!shouldRegister || !view) {
+        if (registeredSessionView) {
+          unregisterTableEditSession(registeredSessionView, tableEditSession);
+          registeredSessionView = null;
+        }
+        return;
+      }
+      if (registeredSessionView === view) return;
+      if (registeredSessionView) unregisterTableEditSession(registeredSessionView, tableEditSession);
+      registerTableEditSession(view, tableEditSession);
+      registeredSessionView = view;
     }
 
     function acquireEditingLock(lock: keyof typeof editingLocks): void {
       if (editingLocks[lock]) return;
       editingLocks[lock] = true;
       self.editing = true;
-      tableEditingCount++;
+      const view = self.viewRef.current;
+      if (view) {
+        editingLockViews[lock] = view;
+        incrementTableEditing(view);
+      }
+      updateSessionRegistration();
     }
 
     function releaseEditingLock(lock: keyof typeof editingLocks): void {
       if (!editingLocks[lock]) return;
       editingLocks[lock] = false;
-      tableEditingCount = Math.max(0, tableEditingCount - 1);
+      const view = editingLockViews[lock];
+      if (view) decrementTableEditing(view);
+      delete editingLockViews[lock];
       self.editing = hasEditingLocks();
+      updateSessionRegistration();
     }
 
     this.cleanupEditingLocks = () => {
+      sessionClosed = true;
+      dirtyRows.clear();
       releaseEditingLock("focus");
       releaseEditingLock("range");
       releaseEditingLock("drag");
       clearPendingNativeTextSelection();
+      if (registeredSessionView) {
+        unregisterTableEditSession(registeredSessionView, tableEditSession);
+        registeredSessionView = null;
+      }
       if (selectionChangeDocument) {
         selectionChangeDocument.removeEventListener("selectionchange", onDocumentSelectionChange);
         selectionChangeDocument = null;
       }
     };
 
-    const rememberDirtyRow = (lineIdx: number | undefined, row: HTMLElement): void => {
-      if (lineIdx === undefined) return;
+    function rememberDirtyRow(lineIdx: number | undefined, row: HTMLElement): void {
+      if (sessionClosed || lineIdx === undefined) return;
       dirtyRows.set(lineIdx, row);
-    };
+      updateSessionRegistration();
+    }
 
     const findRenderedRowForSourceLine = (lineIdx: number): HTMLElement | null => {
       const ownerDocument = wrapper.ownerDocument;
@@ -655,10 +837,12 @@ export class EditableTableWidget extends WidgetType {
       return "| " + vals.join(" | ") + " |";
     };
 
-    const syncDirtyRowsToDocument = (): boolean => {
-      const v = self.viewRef.current;
-      if (!v || dirtyRows.size === 0) return false;
-
+    function dirtySourceSnapshot(): {
+      source: string;
+      changed: boolean;
+      firstChangedLineIdx: number | null;
+      firstChangedRow: HTMLElement | null;
+    } {
       const nextSourceLines = sourceLines.slice();
       let changed = false;
       let firstChangedLineIdx: number | null = null;
@@ -671,23 +855,65 @@ export class EditableTableWidget extends WidgetType {
         firstChangedRow ??= row;
         changed = true;
       });
-      dirtyRows.clear();
-      if (!changed) return false;
+      return {
+        source: nextSourceLines.join("\n"),
+        changed,
+        firstChangedLineIdx,
+        firstChangedRow,
+      };
+    }
 
-      const anchorLineIdx = firstChangedLineIdx ?? 0;
+    function clearDirtyRows(): void {
+      dirtyRows.clear();
+      updateSessionRegistration();
+    }
+
+    function currentDocumentContainsOriginalTable(v: EditorView): boolean {
+      const tableEnd = self.tableFrom + self.source.length;
+      return tableEnd <= v.state.doc.length &&
+        v.state.doc.sliceString(self.tableFrom, tableEnd) === self.source;
+    }
+
+    function takeDirtySourceForStructuralEdit(): { source: string; changed: boolean; valid: boolean } {
+      const v = self.viewRef.current;
+      if (!v || !currentDocumentContainsOriginalTable(v)) {
+        clearDirtyRows();
+        return { source: self.source, changed: false, valid: false };
+      }
+      const snapshot = dirtySourceSnapshot();
+      clearDirtyRows();
+      return { source: snapshot.source, changed: snapshot.changed, valid: true };
+    }
+
+    function syncDirtyRowsToDocument(): boolean {
+      const v = self.viewRef.current;
+      if (!v || dirtyRows.size === 0) return false;
+      if (!currentDocumentContainsOriginalTable(v)) {
+        clearDirtyRows();
+        return false;
+      }
+
+      const snapshot = dirtySourceSnapshot();
+      if (!snapshot.changed) {
+        clearDirtyRows();
+        return false;
+      }
+
+      const anchorLineIdx = snapshot.firstChangedLineIdx ?? 0;
       const anchor = lineStartOffset(sourceLines, anchorLineIdx, self.tableFrom);
-      if (firstChangedRow) restoreRowScrollPosition(anchorLineIdx, firstChangedRow);
+      if (snapshot.firstChangedRow) restoreRowScrollPosition(anchorLineIdx, snapshot.firstChangedRow);
+      clearDirtyRows();
       v.dispatch({
         changes: {
           from: self.tableFrom,
           to: self.tableFrom + self.source.length,
-          insert: nextSourceLines.join("\n")
+          insert: snapshot.source
         },
         selection: { anchor, head: anchor }
       });
       v.requestMeasure();
       return true;
-    };
+    }
 
     const hasActiveCellInWrapper = (): boolean => {
       const active = wrapper.ownerDocument.activeElement;
@@ -1276,6 +1502,7 @@ export class EditableTableWidget extends WidgetType {
       const savedDropCol = dropTargetCol;
       const savedDragRow = draggingRow;
       const savedDropRow = dropTargetRow;
+      const pendingSource = takeDirtySourceForStructuralEdit();
 
       // Clean up visual state FIRST
       clearDragHighlights();
@@ -1293,9 +1520,13 @@ export class EditableTableWidget extends WidgetType {
       // Release editing lock BEFORE dispatch so the resulting update rebuilds widget
       releaseEditingLock("drag");
 
-      // Now dispatch the move — this triggers a full decoration rebuild with new source
-      if (movedCol) self.moveColumn(savedDragCol, savedDropCol);
-      if (movedRow) self.moveRow(savedDragRow, savedDropRow);
+      if (!pendingSource.valid) return;
+
+      // Commit the pending cell text and the structural move together so a
+      // drag can never rebuild from the widget's stale constructor source.
+      if (movedCol) self.moveColumn(savedDragCol, savedDropCol, pendingSource.source);
+      else if (movedRow) self.moveRow(savedDragRow, savedDropRow, pendingSource.source);
+      else if (pendingSource.changed) self.dispatch(pendingSource.source);
     }
 
     function startColDrag(colIdx: number, startX: number): void {
@@ -1566,6 +1797,7 @@ export class EditableTableWidget extends WidgetType {
           renderCellRich(td, astCell, self.tableFrom, rawSourceStart);
         } else {
           td.textContent = rawSource;
+          writePlainSourceMap(td, rawSource.length);
         }
         td.style.cssText =
           "position:relative;border-bottom:1px solid var(--nexus-border);border-right:1px solid var(--nexus-border);padding:8px 12px;" +
@@ -1805,6 +2037,10 @@ export class EditableTableWidget extends WidgetType {
           enterRawEditingMode();
         });
         td.addEventListener("blur", () => {
+          // input/compositionend can be followed immediately by blur. Snapshot
+          // before swapping raw DOM back to rich rendering so the final IME
+          // candidate (or last ordinary keystroke) cannot be overwritten.
+          rememberCellSourceEdit();
           releaseEditingLock("focus");
           td.contentEditable = "false";
           // Restore default text-flow + width rules — we set them on
@@ -1833,10 +2069,12 @@ export class EditableTableWidget extends WidgetType {
           const cellChanged = (td.dataset.source ?? "") !== rawSource;
           if (cellChanged) {
             td.textContent = td.dataset.source ?? "";
+            writePlainSourceMap(td, td.textContent?.length ?? 0);
           } else if (astCell && Array.isArray(astCell.children) && astCell.children.length > 0) {
             renderCellRich(td, astCell, self.tableFrom, rawSourceStart);
           } else {
             td.textContent = td.dataset.source ?? "";
+            writePlainSourceMap(td, td.textContent?.length ?? 0);
           }
 
           // For the edited-then-blurred case, queue a no-op selection
@@ -1848,6 +2086,13 @@ export class EditableTableWidget extends WidgetType {
             // CM 文档选区（常是第 0 行），让光标"飞到第一行"而非落在目标单元格。
             if (navigatingBetweenCells) {
               tableNavDebug("blur-dispatch:skipped (navigating)");
+              return;
+            }
+            // Grip mousedown blurs the active cell before mouseup performs the
+            // reorder. Keep the dirty row pending so onDragEnd can combine the
+            // text edit and the move in one transaction.
+            if (draggingCol >= 0 || draggingRow >= 0) {
+              tableNavDebug("blur-dispatch:skipped (dragging)");
               return;
             }
             // 鼠标从一个单元格切到另一个单元格时，旧单元格的 blur 微任务会晚于
@@ -1872,18 +2117,19 @@ export class EditableTableWidget extends WidgetType {
           });
         });
 
-        const rememberCellSourceEdit = (): void => {
+        function rememberCellSourceEdit(): void {
           if (sourceLineIdx === undefined) return;
           td.dataset.source = td.textContent ?? "";
           rememberDirtyRow(sourceLineIdx, tr);
-        };
+        }
 
         const queueCompositionSourceSnapshot = (): void => {
           if (compositionSourceQueued) return;
           compositionSourceQueued = true;
-          window.setTimeout(() => {
+          const ownerWindow = td.ownerDocument.defaultView ?? window;
+          ownerWindow.setTimeout(() => {
             compositionSourceQueued = false;
-            if (cellComposing) return;
+            if (cellComposing || !td.isConnected) return;
             rememberCellSourceEdit();
           }, 0);
         };
@@ -1905,6 +2151,7 @@ export class EditableTableWidget extends WidgetType {
         td.addEventListener("compositionend", (event) => {
           event.stopPropagation();
           cellComposing = false;
+          rememberCellSourceEdit();
           // 浏览器会在 compositionend 前后把候选词提交进 contentEditable。
           // 延后一拍读取 TD，只更新待提交源码，避免输入阶段重绘长表格导致失焦。
           queueCompositionSourceSnapshot();

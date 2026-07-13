@@ -35,6 +35,23 @@ async function blurCellOutsideTable(cell: HTMLElement): Promise<void> {
   activeElementSpy.mockRestore();
 }
 
+function activateTableCell(cell: HTMLElement, clientX = 80, clientY = 40): void {
+  document.getSelection()?.removeAllRanges();
+  cell.dispatchEvent(new MouseEvent("mousedown", {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    clientX,
+    clientY,
+  }));
+  document.dispatchEvent(new MouseEvent("mouseup", {
+    bubbles: true,
+    button: 0,
+    clientX,
+    clientY,
+  }));
+}
+
 describe("live preview", () => {
   // ── Inline formatting ──
   // Note: inline markers are hidden when cursor is on a DIFFERENT line (line-level detection).
@@ -675,6 +692,36 @@ describe("live preview", () => {
     container.remove();
   });
 
+  it("maps focused cells correctly without leading pipes and across escaped pipes", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    let capturedView: EditorView | null = null;
+    const captureView = ViewPlugin.fromClass(
+      class {
+        constructor(readonly view: EditorView) {
+          capturedView = view;
+        }
+      }
+    );
+    const source = "A \\| literal | B\n--- | ---\nvalue \\| one | target";
+    const editor = createEditor({
+      container,
+      initialValue: source,
+      livePreview: true,
+      plugins: [createGfmPreset(), { name: "capture-view", cmExtensions: [captureView] }]
+    });
+    const view = requireEditorView(capturedView);
+    const cell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[1];
+    expect(cell).not.toBeUndefined();
+
+    activateTableCell(cell!);
+
+    expect(view.state.selection.main.anchor).toBe(source.indexOf("target"));
+
+    editor.destroy();
+    container.remove();
+  });
+
   it("keeps the focused table cell DOM stable while typing and commits on blur", async () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
@@ -778,6 +825,293 @@ describe("live preview", () => {
     await blurCellOutsideTable(cell!);
 
     expect(editor.getDocument()).toContain("| 你好 | aa |");
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it("keeps the final IME candidate when compositionend is immediately followed by blur", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const editor = createEditor({
+      container,
+      initialValue: "| A | B |\n| --- | --- |\n|  | aa |",
+      livePreview: true,
+      plugins: [createGfmPreset()]
+    });
+    const cell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    expect(cell).not.toBeUndefined();
+    activateTableCell(cell!);
+
+    cell!.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
+    cell!.textContent = "ni";
+    cell!.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      data: "ni",
+      inputType: "insertCompositionText",
+      isComposing: true,
+    }));
+    cell!.textContent = "你好";
+    cell!.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "你好" }));
+
+    await blurCellOutsideTable(cell!);
+
+    expect(editor.getDocument()).toContain("| 你好 | aa |");
+    expect(editor.getDocument()).not.toContain("| ni | aa |");
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it("flushes a dirty table cell before an external document replacement", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const docs: string[] = [];
+    const editor = createEditor({
+      container,
+      initialValue: "| A | B |\n| --- | --- |\n| old | 2 |",
+      livePreview: true,
+      plugins: [createGfmPreset()],
+      parseDelayMs: 10_000,
+      onChange(doc) {
+        docs.push(doc);
+      },
+    });
+    const cell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    expect(cell).not.toBeUndefined();
+    activateTableCell(cell!);
+    cell!.textContent = "edited";
+    cell!.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "edited" }));
+
+    expect(() => editor.setDocument("replacement", { silent: true })).not.toThrow();
+
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toContain("| edited | 2 |");
+    expect(editor.getDocument()).toBe("replacement");
+
+    // A late blur from the detached widget must not dispatch its stale table range.
+    cell!.dispatchEvent(new Event("blur"));
+    await Promise.resolve();
+    expect(editor.getDocument()).toBe("replacement");
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it("rebuilds a finished table edit session when setDocument reloads the same source", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const source = "| A | B |\n| --- | --- |\n| old | 2 |";
+    const editor = createEditor({
+      container,
+      initialValue: source,
+      livePreview: true,
+      plugins: [createGfmPreset()]
+    });
+    const firstCell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    expect(firstCell).not.toBeUndefined();
+    activateTableCell(firstCell!);
+
+    editor.setDocument(source, { silent: true });
+
+    const reloadedCell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    expect(reloadedCell).not.toBeUndefined();
+    expect(reloadedCell).not.toBe(firstCell);
+    activateTableCell(reloadedCell!);
+    reloadedCell!.textContent = "edited-after-reload";
+    reloadedCell!.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      inputType: "insertText",
+      data: "edited-after-reload"
+    }));
+
+    await blurCellOutsideTable(reloadedCell!);
+
+    expect(editor.getDocument()).toContain("| edited-after-reload | 2 |");
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it("rebuilds a table widget when unchanged table source moves in the document", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const table = "| A | B |\n| --- | --- |\n| old | 2 |";
+    const editor = createEditor({
+      container,
+      initialValue: `x\n\n${table}`,
+      livePreview: true,
+      plugins: [createGfmPreset()]
+    });
+    const firstCell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    expect(firstCell).not.toBeUndefined();
+
+    editor.setDocument(`a much longer prefix\n\n${table}`, { silent: true });
+
+    const movedCell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    expect(movedCell).not.toBeUndefined();
+    expect(movedCell).not.toBe(firstCell);
+    activateTableCell(movedCell!);
+    movedCell!.textContent = "edited";
+    movedCell!.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      inputType: "insertText",
+      data: "edited"
+    }));
+
+    await blurCellOutsideTable(movedCell!);
+
+    expect(editor.getDocument()).toContain("| edited | 2 |");
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it("keeps table editing locks isolated between editor instances", () => {
+    const firstContainer = document.createElement("div");
+    const secondContainer = document.createElement("div");
+    document.body.append(firstContainer, secondContainer);
+    const firstEditor = createEditor({
+      container: firstContainer,
+      initialValue: "| A |\n| --- |\n| editing |",
+      livePreview: true,
+      plugins: [createGfmPreset()]
+    });
+    const secondEditor = createEditor({
+      container: secondContainer,
+      initialValue: "| A |\n| --- |\n| Old |",
+      livePreview: true,
+      plugins: [createGfmPreset()]
+    });
+    const activeCell = firstContainer.querySelectorAll<HTMLElement>("tr")[2]?.querySelector<HTMLElement>(".nexus-cell");
+    expect(activeCell).not.toBeUndefined();
+    activateTableCell(activeCell!);
+
+    secondEditor.setDocument("| A |\n| --- |\n| New |", { silent: true });
+
+    expect(secondEditor.getDocument()).toContain("| New |");
+    expect(secondContainer.querySelector(".nexus-table-wrapper")?.textContent).toContain("New");
+    expect(secondContainer.querySelector(".nexus-table-wrapper")?.textContent).not.toContain("Old");
+
+    firstEditor.destroy();
+    secondEditor.destroy();
+    firstContainer.remove();
+    secondContainer.remove();
+  });
+
+  it("flushes a dirty table cell before destroy", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const docs: string[] = [];
+    const editor = createEditor({
+      container,
+      initialValue: "| A | B |\n| --- | --- |\n| old | 2 |",
+      livePreview: true,
+      plugins: [createGfmPreset()],
+      parseDelayMs: 10_000,
+      onChange(doc) {
+        docs.push(doc);
+      },
+    });
+    const cell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    expect(cell).not.toBeUndefined();
+    activateTableCell(cell!);
+    cell!.textContent = "saved-before-destroy";
+    cell!.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "saved-before-destroy" }));
+
+    editor.destroy();
+
+    expect(docs.at(-1)).toContain("| saved-before-destroy | 2 |");
+    expect(container.querySelector(".cm-editor")).toBeNull();
+    container.remove();
+  });
+
+  it("still tears down the editor when a flushed table onChange handler throws", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const editor = createEditor({
+      container,
+      initialValue: "| A | B |\n| --- | --- |\n| old | 2 |",
+      livePreview: true,
+      plugins: [createGfmPreset()],
+      parseDelayMs: 10_000,
+      onChange() {
+        throw new Error("host failure");
+      },
+    });
+    const cell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    expect(cell).not.toBeUndefined();
+    activateTableCell(cell!);
+    cell!.textContent = "edited";
+    cell!.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      inputType: "insertText",
+      data: "edited"
+    }));
+
+    expect(() => editor.destroy()).toThrow("host failure");
+
+    expect(container.querySelector(".cm-editor")).toBeNull();
+    container.remove();
+  });
+
+  it("keeps a dirty cell edit when its column is dragged", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const editor = createEditor({
+      container,
+      initialValue: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+      livePreview: true,
+      plugins: [createGfmPreset()]
+    });
+    const rows = Array.from(container.querySelectorAll<HTMLElement>("tr")).filter((row) => row.querySelector(".nexus-cell"));
+    const headerCells = rows[0].querySelectorAll<HTMLElement>(".nexus-cell");
+    headerCells[0].getBoundingClientRect = () => new DOMRect(0, 0, 50, 30);
+    headerCells[1].getBoundingClientRect = () => new DOMRect(50, 0, 50, 30);
+    const cell = rows[1].querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    activateTableCell(cell);
+    cell.textContent = "edited";
+    cell.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "edited" }));
+
+    const grip = container.querySelectorAll<HTMLElement>(".nexus-col-grip")[0];
+    grip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, clientX: 25, clientY: 5 }));
+    cell.dispatchEvent(new Event("blur"));
+    await Promise.resolve();
+    document.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, button: 0, clientX: 75, clientY: 5 }));
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0, clientX: 75, clientY: 5 }));
+
+    expect(editor.getDocument()).toBe("| B | A |\n| --- | --- |\n| 2 | edited |");
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it("keeps a dirty cell edit when its row is dragged", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const editor = createEditor({
+      container,
+      initialValue: "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |",
+      livePreview: true,
+      plugins: [createGfmPreset()]
+    });
+    const rows = Array.from(container.querySelectorAll<HTMLElement>("tr")).filter((row) => row.querySelector(".nexus-cell"));
+    rows[1].getBoundingClientRect = () => new DOMRect(0, 30, 100, 30);
+    rows[2].getBoundingClientRect = () => new DOMRect(0, 60, 100, 30);
+    const cell = rows[1].querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    activateTableCell(cell);
+    cell.textContent = "edited";
+    cell.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "edited" }));
+
+    const grip = rows[1].querySelector<HTMLElement>(".nexus-row-grip");
+    expect(grip).not.toBeNull();
+    grip!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, clientX: 5, clientY: 45 }));
+    cell.dispatchEvent(new Event("blur"));
+    await Promise.resolve();
+    document.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, button: 0, clientX: 5, clientY: 75 }));
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0, clientX: 5, clientY: 75 }));
+
+    expect(editor.getDocument()).toBe("| A | B |\n| --- | --- |\n| 3 | 4 |\n| edited | 2 |");
 
     editor.destroy();
     container.remove();
@@ -1182,13 +1516,14 @@ describe("live preview", () => {
     document.getSelection()?.removeAllRanges();
     document.getSelection()?.addRange(partialRange);
 
+    vi.useFakeTimers();
     document.dispatchEvent(new MouseEvent("mouseup", {
       bubbles: true,
       button: 0,
       clientX: 72,
       clientY: 15
     }));
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await vi.advanceTimersByTimeAsync(0);
 
     const outside = document.createElement("span");
     outside.textContent = "outside";

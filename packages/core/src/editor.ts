@@ -16,6 +16,7 @@ import { unified } from "unified";
 
 import { EventEmitter } from "./event-emitter";
 import { createLivePreviewExtension } from "./live-preview";
+import { flushPendingTableEdits } from "./live-preview-table";
 import { createMarkdownLanguageSupport } from "./lezer-markdown";
 import { lezerStringToMdast, lezerTreeToMdast } from "./lezer-mdast-adapter";
 import { markdownFoldService } from "./markdown-fold";
@@ -281,6 +282,7 @@ export function createEditor(config: EditorConfig): EditorAPI {
   const parseDelayMs = config.parseDelayMs ?? 0;
   const emitter = new EventEmitter<EditorEventMap>();
   let destroyed = false;
+  let destroying = false;
   let focused = false;
   let parseTimer: ReturnType<typeof setTimeout> | undefined;
   let compositionFlushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -358,6 +360,13 @@ export function createEditor(config: EditorConfig): EditorAPI {
     }, parseDelayMs);
   }
 
+  function flushScheduledChangeNow(): void {
+    if (!parseTimer) return;
+    clearTimeout(parseTimer);
+    parseTimer = undefined;
+    emitChange(view.state.doc.toString());
+  }
+
   function queueCompositionChange(markdown: string) {
     pendingCompositionMarkdown = markdown;
     if (parseTimer) {
@@ -394,6 +403,12 @@ export function createEditor(config: EditorConfig): EditorAPI {
 
   // 整文档替换的实际执行体。setDocument（公开 API）在组合输入中会推迟调用本函数。
   function performSetDocument(next: string, opts?: SetDocumentOptions) {
+    // Table cells intentionally keep their DOM edits local until blur so the
+    // live-preview widget stays stable while typing. Commit that pending text
+    // before an external whole-document replacement, then release the widget's
+    // editing lock so the replacement rebuilds decorations from the new doc.
+    const tableEditFlushed = flushPendingTableEdits(view, true);
+    if (tableEditFlushed) flushScheduledChangeNow();
     const beforeSelection = view.state.selection.main;
     const silent = opts?.silent === true;
     const selection = resolveDocumentSelection(
@@ -907,13 +922,33 @@ export function createEditor(config: EditorConfig): EditorAPI {
       return { characters, words, lines };
     },
     destroy() {
-      debugNexus("destroy", {
-        documentLength: view.state.doc.length,
-        selection: {
-          anchor: view.state.selection.main.anchor,
-          head: view.state.selection.main.head,
-        },
-      });
+      if (destroyed || destroying) return;
+      destroying = true;
+      // A focused table cell may not have blurred yet. Flush its local DOM
+      // value while the view and change pipeline are still alive.
+      let firstError: unknown;
+      let hasError = false;
+      try {
+        const tableEditFlushed = flushPendingTableEdits(view, true);
+        if (tableEditFlushed) flushScheduledChangeNow();
+      } catch (error) {
+        firstError = error;
+        hasError = true;
+      }
+      try {
+        debugNexus("destroy", {
+          documentLength: view.state.doc.length,
+          selection: {
+            anchor: view.state.selection.main.anchor,
+            head: view.state.selection.main.head,
+          },
+        });
+      } catch (error) {
+        if (!hasError) {
+          firstError = error;
+          hasError = true;
+        }
+      }
       destroyed = true;
       focused = false;
       if (parseTimer) {
@@ -928,7 +963,16 @@ export function createEditor(config: EditorConfig): EditorAPI {
       pendingDocumentLoad = null;
       composing = false;
       emitter.clear();
-      view.destroy();
+      try {
+        view.destroy();
+      } catch (error) {
+        if (!hasError) {
+          firstError = error;
+          hasError = true;
+        }
+      }
+      destroying = false;
+      if (hasError) throw firstError;
     }
   };
 
