@@ -9,6 +9,7 @@ import {
   replaceNext,
   search,
   searchKeymap,
+  searchPanelOpen,
   SearchQuery,
   selectMatches,
   setSearchQuery
@@ -102,10 +103,10 @@ const DEFAULT_LABELS: SearchPluginLabels = {
 
 const DEFAULT_SEARCH_HISTORY_KEY = "nexus.search.history";
 const DEFAULT_SEARCH_HISTORY_MAX_ENTRIES = 20;
-const TABLE_SEARCH_MATCH_HIGHLIGHT = "nexus-table-search-match";
-const TABLE_SEARCH_SELECTED_HIGHLIGHT = "nexus-table-search-selected";
 const TABLE_SEARCH_CELL_SELECTOR = ".nexus-table-wrapper .nexus-cell";
-const TABLE_SEARCH_STYLE_ID = "nexus-table-search-highlight-style";
+const TABLE_SEARCH_HIGHLIGHT_PREFIX = "nexus-table-search";
+
+let nextTableSearchHighlightId = 0;
 
 type SearchHistoryDirection = "previous" | "next";
 
@@ -115,6 +116,36 @@ type CssHighlightRegistry = {
 };
 
 type HighlightConstructor = new (...ranges: Range[]) => unknown;
+
+interface TableSearchHighlightNames {
+  match: string;
+  selected: string;
+  styleId: string;
+}
+
+interface RenderedSearchMatch extends SearchMatch {
+  sourceFrom: number;
+  sourceTo: number;
+}
+
+interface TableSearchCell {
+  element: HTMLElement;
+  rendered: string;
+  sourceFrom: number;
+  sourceTo: number;
+  segments: RenderedSourceSegment[];
+}
+
+interface RenderedTableSearchMatch extends RenderedSearchMatch {
+  cell: HTMLElement;
+}
+
+interface RenderedSourceSegment {
+  renderedFrom: number;
+  renderedTo: number;
+  sourceFrom: number;
+  sourceTo: number;
+}
 
 function getCssHighlightSupport(doc: Document):
   | {
@@ -141,22 +172,34 @@ function getCssHighlightSupport(doc: Document):
   return { registry, Highlight: HighlightCtor };
 }
 
-function ensureTableSearchHighlightStyles(doc: Document): void {
-  if (doc.getElementById(TABLE_SEARCH_STYLE_ID)) return;
+function createTableSearchHighlightNames(): TableSearchHighlightNames {
+  const id = ++nextTableSearchHighlightId;
+  return {
+    match: `${TABLE_SEARCH_HIGHLIGHT_PREFIX}-${id}-match`,
+    selected: `${TABLE_SEARCH_HIGHLIGHT_PREFIX}-${id}-selected`,
+    styleId: `${TABLE_SEARCH_HIGHLIGHT_PREFIX}-${id}-style`
+  };
+}
 
+function createTableSearchHighlightStyles(
+  doc: Document,
+  names: TableSearchHighlightNames
+): HTMLStyleElement {
   const style = doc.createElement("style");
-  style.id = TABLE_SEARCH_STYLE_ID;
+  style.id = names.styleId;
+  style.dataset.nexusTableSearchHighlight = "true";
   style.textContent = `
-::highlight(${TABLE_SEARCH_MATCH_HIGHLIGHT}) {
+::highlight(${names.match}) {
   background-color: rgba(255, 214, 10, 0.38);
   color: inherit;
 }
-::highlight(${TABLE_SEARCH_SELECTED_HIGHLIGHT}) {
+::highlight(${names.selected}) {
   background-color: rgba(255, 177, 0, 0.68);
   color: inherit;
 }
 `;
   doc.head.appendChild(style);
+  return style;
 }
 
 function createTextRanges(root: Element, from: number, to: number): Range[] {
@@ -196,89 +239,252 @@ function readNumericDatasetValue(element: HTMLElement, key: string): number | nu
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function isSelectedSearchMatch(cell: HTMLElement, match: SearchMatch, selectionFrom: number, selectionTo: number): boolean {
-  const sourceFrom = readNumericDatasetValue(cell, "sourceFrom");
-  if (sourceFrom === null) return false;
-
-  const matchFrom = sourceFrom + match.from;
-  const matchTo = sourceFrom + match.to;
-  return matchFrom === selectionFrom && matchTo === selectionTo;
+function readRenderedSourceSegments(cell: HTMLElement): RenderedSourceSegment[] {
+  const encoded = cell.dataset.renderedSourceMap;
+  if (!encoded) return [];
+  try {
+    const value = JSON.parse(encoded) as unknown;
+    if (!Array.isArray(value)) return [];
+    return value.filter((segment): segment is RenderedSourceSegment => {
+      if (!segment || typeof segment !== "object") return false;
+      const candidate = segment as Partial<RenderedSourceSegment>;
+      return (
+        Number.isInteger(candidate.renderedFrom) &&
+        Number.isInteger(candidate.renderedTo) &&
+        Number.isInteger(candidate.sourceFrom) &&
+        Number.isInteger(candidate.sourceTo) &&
+        candidate.renderedFrom! >= 0 &&
+        candidate.renderedTo! >= candidate.renderedFrom! &&
+        candidate.sourceFrom! >= 0 &&
+        candidate.sourceTo! >= candidate.sourceFrom!
+      );
+    });
+  } catch {
+    return [];
+  }
 }
 
-function clearTableSearchHighlights(doc: Document): void {
-  const support = getCssHighlightSupport(doc);
-  support?.registry.delete(TABLE_SEARCH_MATCH_HIGHLIGHT);
-  support?.registry.delete(TABLE_SEARCH_SELECTED_HIGHLIGHT);
-}
+function mapSourceRangeToRendered(
+  segments: RenderedSourceSegment[],
+  sourceFrom: number,
+  sourceTo: number
+): { from: number; to: number } | null {
+  if (sourceTo <= sourceFrom) return null;
+  let sourceCursor = sourceFrom;
+  let renderedFrom: number | null = null;
+  let renderedCursor = -1;
 
-function syncTableSearchHighlights(view: EditorView): void {
-  const doc = view.dom.ownerDocument;
-  const support = getCssHighlightSupport(doc);
-  if (!support) return;
+  for (const segment of segments) {
+    if (segment.sourceTo <= sourceCursor) continue;
+    if (segment.sourceFrom > sourceCursor) return null;
+    const sourceLength = segment.sourceTo - segment.sourceFrom;
+    const renderedLength = segment.renderedTo - segment.renderedFrom;
+    if (sourceLength !== renderedLength) return null;
 
-  ensureTableSearchHighlightStyles(doc);
+    const partSourceTo = Math.min(sourceTo, segment.sourceTo);
+    const partRenderedFrom = segment.renderedFrom + sourceCursor - segment.sourceFrom;
+    const partRenderedTo = segment.renderedFrom + partSourceTo - segment.sourceFrom;
+    if (renderedFrom === null) renderedFrom = partRenderedFrom;
+    else if (partRenderedFrom !== renderedCursor) return null;
 
-  const query = getSearchQuery(view.state);
-  if (!query.search) {
-    clearTableSearchHighlights(doc);
-    return;
+    renderedCursor = partRenderedTo;
+    sourceCursor = partSourceTo;
+    if (sourceCursor === sourceTo) {
+      return { from: renderedFrom, to: renderedCursor };
+    }
   }
 
-  const selection = view.state.selection.main;
-  const selectionFrom = Math.min(selection.anchor, selection.head);
-  const selectionTo = Math.max(selection.anchor, selection.head);
-  const matchRanges: Range[] = [];
-  const selectedRanges: Range[] = [];
+  return null;
+}
 
-  view.dom.querySelectorAll<HTMLElement>(TABLE_SEARCH_CELL_SELECTOR).forEach((cell) => {
-    if (cell.isContentEditable) return;
+function readTableSearchCell(view: EditorView, cell: HTMLElement): TableSearchCell | null {
+  const source = cell.dataset.source;
+  const sourceFrom = readNumericDatasetValue(cell, "sourceFrom");
+  const sourceTo = readNumericDatasetValue(cell, "sourceTo");
+  if (source === undefined || sourceFrom === null || sourceTo === null) return null;
+  if (sourceTo - sourceFrom !== source.length) return null;
+  if (view.state.sliceDoc(sourceFrom, sourceTo) !== source) return null;
 
-    const matches = findSearchMatches(cell.textContent ?? "", query.search, {
-      caseSensitive: query.caseSensitive,
-      regexp: query.regexp,
-      wholeWord: query.wholeWord
+  const rendered = cell.textContent ?? "";
+  if (!rendered) return null;
+  const segments = readRenderedSourceSegments(cell);
+  if (segments.length === 0) return null;
+
+  return { element: cell, rendered, sourceFrom, sourceTo, segments };
+}
+
+function findRenderedTableSearchMatches(
+  view: EditorView,
+  query: SearchQuery
+): RenderedTableSearchMatch[] {
+  const cells = Array.from(view.dom.querySelectorAll<HTMLElement>(TABLE_SEARCH_CELL_SELECTOR))
+    .filter((cell) => !cell.isContentEditable)
+    .map((cell) => readTableSearchCell(view, cell))
+    .filter((cell): cell is TableSearchCell => cell !== null)
+    .sort((a, b) => a.sourceFrom - b.sourceFrom);
+  if (cells.length === 0) return [];
+
+  const renderedMatches: RenderedTableSearchMatch[] = [];
+  const sourceCursor = query.getCursor(view.state);
+  let cellIndex = 0;
+  for (let result = sourceCursor.next(); !result.done; result = sourceCursor.next()) {
+    const absoluteFrom = result.value.from;
+    const absoluteTo = result.value.to;
+    if (absoluteTo <= absoluteFrom) continue;
+    while (cellIndex < cells.length && cells[cellIndex].sourceTo <= absoluteFrom) cellIndex++;
+    if (cellIndex >= cells.length) break;
+
+    let cell: TableSearchCell | null = null;
+    for (let index = cellIndex; index < cells.length && cells[index].sourceFrom < absoluteTo; index++) {
+      const candidate = cells[index];
+      if (absoluteFrom >= candidate.sourceFrom && absoluteTo <= candidate.sourceTo) {
+        cell = candidate;
+        break;
+      }
+    }
+    if (!cell) continue;
+
+    const mapped = mapSourceRangeToRendered(
+      cell.segments,
+      absoluteFrom - cell.sourceFrom,
+      absoluteTo - cell.sourceFrom
+    );
+    if (!mapped || mapped.to > cell.rendered.length) continue;
+    const sourceText = view.state.sliceDoc(absoluteFrom, absoluteTo);
+    if (cell.rendered.slice(mapped.from, mapped.to) !== sourceText) continue;
+
+    renderedMatches.push({
+      cell: cell.element,
+      from: mapped.from,
+      to: mapped.to,
+      text: cell.rendered.slice(mapped.from, mapped.to),
+      sourceFrom: absoluteFrom,
+      sourceTo: absoluteTo
     });
+  }
 
-    for (const match of matches) {
-      const ranges = createTextRanges(cell, match.from, match.to);
-      if (isSelectedSearchMatch(cell, match, selectionFrom, selectionTo)) {
+  return renderedMatches;
+}
+
+function isSelectedSearchMatch(
+  match: RenderedSearchMatch,
+  selections: readonly { from: number; to: number }[]
+): boolean {
+  return selections.some(
+    (selection) => match.sourceFrom === selection.from && match.sourceTo === selection.to
+  );
+}
+
+class TableSearchHighlighter {
+  private readonly names = createTableSearchHighlightNames();
+  private registry: CssHighlightRegistry | null = null;
+  private style: HTMLStyleElement | null = null;
+  private syncScheduled = false;
+  private destroyed = false;
+
+  constructor(private readonly view: EditorView) {
+    this.sync();
+  }
+
+  sync(): void {
+    if (this.destroyed) return;
+    const doc = this.view.dom.ownerDocument;
+    const support = getCssHighlightSupport(doc);
+    if (!support) {
+      this.clear();
+      return;
+    }
+
+    if (this.registry && this.registry !== support.registry) {
+      this.registry.delete(this.names.match);
+      this.registry.delete(this.names.selected);
+    }
+    this.registry = support.registry;
+
+    const query = getSearchQuery(this.view.state);
+    if (!searchPanelOpen(this.view.state) || !query.valid) {
+      this.clear();
+      return;
+    }
+
+    if (!this.style?.isConnected) {
+      this.style = createTableSearchHighlightStyles(doc, this.names);
+    }
+
+    const selections = this.view.state.selection.ranges.map((selection) => ({
+      from: selection.from,
+      to: selection.to,
+    }));
+    const matchRanges: Range[] = [];
+    const selectedRanges: Range[] = [];
+
+    for (const match of findRenderedTableSearchMatches(this.view, query)) {
+      const ranges = createTextRanges(match.cell, match.from, match.to);
+      if (isSelectedSearchMatch(match, selections)) {
         selectedRanges.push(...ranges);
       } else {
         matchRanges.push(...ranges);
       }
     }
-  });
 
-  if (matchRanges.length > 0) {
-    support.registry.set(TABLE_SEARCH_MATCH_HIGHLIGHT, new support.Highlight(...matchRanges));
-  } else {
-    support.registry.delete(TABLE_SEARCH_MATCH_HIGHLIGHT);
+    if (matchRanges.length > 0) {
+      support.registry.set(this.names.match, new support.Highlight(...matchRanges));
+    } else {
+      support.registry.delete(this.names.match);
+    }
+
+    if (selectedRanges.length > 0) {
+      support.registry.set(this.names.selected, new support.Highlight(...selectedRanges));
+    } else {
+      support.registry.delete(this.names.selected);
+    }
   }
 
-  if (selectedRanges.length > 0) {
-    support.registry.set(TABLE_SEARCH_SELECTED_HIGHLIGHT, new support.Highlight(...selectedRanges));
-  } else {
-    support.registry.delete(TABLE_SEARCH_SELECTED_HIGHLIGHT);
+  scheduleSync(): void {
+    if (this.destroyed || this.syncScheduled) return;
+    this.syncScheduled = true;
+    queueMicrotask(() => {
+      this.syncScheduled = false;
+      this.sync();
+    });
+  }
+
+  clear(): void {
+    this.registry?.delete(this.names.match);
+    this.registry?.delete(this.names.selected);
+    this.style?.remove();
+    this.style = null;
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    this.clear();
+    this.registry = null;
   }
 }
 
 const tableSearchHighlightPlugin = ViewPlugin.fromClass(
   class {
-    constructor(private readonly view: EditorView) {
-      syncTableSearchHighlights(view);
+    private readonly highlighter: TableSearchHighlighter;
+
+    constructor(view: EditorView) {
+      this.highlighter = new TableSearchHighlighter(view);
     }
 
     update(update: ViewUpdate): void {
       const searchQueryChanged = update.transactions.some((transaction) =>
         transaction.effects.some((effect) => effect.is(setSearchQuery))
       );
-      if (update.docChanged || update.selectionSet || update.viewportChanged || searchQueryChanged) {
-        syncTableSearchHighlights(update.view);
+      const searchPanelChanged = searchPanelOpen(update.startState) !== searchPanelOpen(update.state);
+      if (update.docChanged || update.viewportChanged) {
+        this.highlighter.scheduleSync();
+      } else if (update.selectionSet || searchQueryChanged || searchPanelChanged) {
+        this.highlighter.sync();
       }
     }
 
     destroy(): void {
-      clearTableSearchHighlights(this.view.dom.ownerDocument);
+      this.highlighter.destroy();
     }
   }
 );

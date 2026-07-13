@@ -8,8 +8,7 @@ import {
 } from "../src/index";
 
 const HISTORY_KEY = "nexus:test-search-history";
-const TABLE_SEARCH_MATCH_HIGHLIGHT = "nexus-table-search-match";
-const TABLE_SEARCH_SELECTED_HIGHLIGHT = "nexus-table-search-selected";
+const TABLE_SEARCH_HIGHLIGHT_PREFIX = "nexus-table-search-";
 
 class FakeHighlight {
   readonly ranges: Range[];
@@ -57,6 +56,18 @@ function installCssHighlightMock() {
 
 function readHighlightText(highlight: FakeHighlight | undefined): string {
   return highlight?.ranges.map((range) => range.toString()).join("") ?? "";
+}
+
+function readTableHighlightTexts(
+  registry: Map<string, FakeHighlight>,
+  kind: "match" | "selected"
+): string[] {
+  return Array.from(registry.entries())
+    .filter(
+      ([name]) =>
+        name.startsWith(TABLE_SEARCH_HIGHLIGHT_PREFIX) && name.endsWith(`-${kind}`)
+    )
+    .map(([, highlight]) => readHighlightText(highlight));
 }
 
 function createEmptyRect(): DOMRect {
@@ -320,16 +331,190 @@ describe("@floatboat/nexus-plugin-search", () => {
 
       submitSearch(input, "SearchNeedle070");
 
-      expect(readHighlightText(highlightSupport.registry.get(TABLE_SEARCH_SELECTED_HIGHLIGHT))).toBe(
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected")).toEqual([
         "SearchNeedle070"
-      );
-      expect(readHighlightText(highlightSupport.registry.get(TABLE_SEARCH_MATCH_HIGHLIGHT))).toBe("");
+      ]);
+      expect(readTableHighlightTexts(highlightSupport.registry, "match")).toEqual([]);
       expect(container.querySelector(".nexus-table-wrapper")?.textContent).toContain("SearchNeedle070");
     } finally {
       editor.destroy();
       container.remove();
       highlightSupport.restore();
     }
+  });
+
+  it("maps rich table matches to their exact Markdown source ranges", () => {
+    const highlightSupport = installCssHighlightMock();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const editor = createEditor({
+      container,
+      initialValue: [
+        "| Strong | Split | Link | Hidden URL | Repeated label | Double code |",
+        "| --- | --- | --- | --- | --- | --- |",
+        "| **RichNeedle** | **ab**cd | [Label](https://x) | [Shown](https://x.test/HiddenNeedle) | [RepeatedLabel](https://x.test/RepeatedLabel) | ``CodeNeedle`` |"
+      ].join("\n"),
+      livePreview: true,
+      plugins: [createGfmPreset(), createSearchPlugin()]
+    });
+
+    try {
+      const input = openSearchPanel(container);
+
+      submitSearch(input, "RichNeedle");
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected")).toEqual([
+        "RichNeedle"
+      ]);
+
+      submitSearch(input, "bc");
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected")).toEqual([]);
+      expect(readTableHighlightTexts(highlightSupport.registry, "match")).toEqual([]);
+
+      submitSearch(input, "Label");
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected")).toEqual(["Label"]);
+
+      submitSearch(input, "HiddenNeedle");
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected")).toEqual([]);
+      expect(readTableHighlightTexts(highlightSupport.registry, "match")).toEqual([]);
+
+      submitSearch(input, "RepeatedLabel");
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected")).toEqual([
+        "RepeatedLabel"
+      ]);
+
+      submitSearch(input, "CodeNeedle");
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected")).toEqual([
+        "CodeNeedle"
+      ]);
+    } finally {
+      editor.destroy();
+      container.remove();
+      highlightSupport.restore();
+    }
+  });
+
+  it("keeps table highlights when an unchanged table moves in the document", async () => {
+    const highlightSupport = installCssHighlightMock();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const editor = createEditor({
+      container,
+      initialValue: "| Value |\n| --- |\n| Label |",
+      livePreview: true,
+      plugins: [createGfmPreset(), createSearchPlugin()]
+    });
+
+    try {
+      submitSearch(openSearchPanel(container), "Label");
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected")).toEqual(["Label"]);
+
+      editor.replaceRange(0, 0, "a longer prefix\n\n");
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+      expect([
+        ...readTableHighlightTexts(highlightSupport.registry, "selected"),
+        ...readTableHighlightTexts(highlightSupport.registry, "match"),
+      ]).toContain("Label");
+    } finally {
+      editor.destroy();
+      container.remove();
+      highlightSupport.restore();
+    }
+  });
+
+  it("uses whole-document regexp context for rendered table matches", () => {
+    const highlightSupport = installCssHighlightMock();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const editor = createEditor({
+      container,
+      initialValue: "| Value |\n| --- |\n| Label |",
+      livePreview: true,
+      plugins: [createGfmPreset(), createSearchPlugin()]
+    });
+
+    try {
+      const input = openSearchPanel(container);
+      const regexpField = container.querySelector<HTMLInputElement>(
+        '[data-test-id="markdown-search-regexp-toggle"]'
+      );
+      expect(regexpField).not.toBeNull();
+      regexpField!.checked = true;
+      regexpField!.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
+
+      submitSearch(input, "Label$");
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected")).toEqual([]);
+      expect(readTableHighlightTexts(highlightSupport.registry, "match")).toEqual([]);
+
+      submitSearch(input, "Label(?= \\|)");
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected")).toEqual(["Label"]);
+    } finally {
+      editor.destroy();
+      container.remove();
+      highlightSupport.restore();
+    }
+  });
+
+  it("isolates table highlights between editors and clears them on close and destroy", () => {
+    const highlightSupport = installCssHighlightMock();
+    const firstContainer = document.createElement("div");
+    const secondContainer = document.createElement("div");
+    document.body.append(firstContainer, secondContainer);
+    const initialStyleCount = document.querySelectorAll(
+      "style[data-nexus-table-search-highlight]"
+    ).length;
+    const firstEditor = createEditor({
+      container: firstContainer,
+      initialValue: "| Value |\n| --- |\n| FirstNeedle |",
+      livePreview: true,
+      plugins: [createGfmPreset(), createSearchPlugin()]
+    });
+    const secondEditor = createEditor({
+      container: secondContainer,
+      initialValue: "| Value |\n| --- |\n| SecondNeedle |",
+      livePreview: true,
+      plugins: [createGfmPreset(), createSearchPlugin()]
+    });
+
+    try {
+      submitSearch(openSearchPanel(firstContainer), "FirstNeedle");
+      submitSearch(openSearchPanel(secondContainer), "SecondNeedle");
+
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected").sort()).toEqual([
+        "FirstNeedle",
+        "SecondNeedle"
+      ]);
+      expect(
+        document.querySelectorAll("style[data-nexus-table-search-highlight]").length
+      ).toBe(initialStyleCount + 2);
+
+      firstEditor.destroy();
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected")).toEqual([
+        "SecondNeedle"
+      ]);
+      expect(
+        document.querySelectorAll("style[data-nexus-table-search-highlight]").length
+      ).toBe(initialStyleCount + 1);
+
+      secondContainer
+        .querySelector<HTMLButtonElement>('[data-test-id="markdown-search-close"]')
+        ?.click();
+      expect(readTableHighlightTexts(highlightSupport.registry, "selected")).toEqual([]);
+      expect(readTableHighlightTexts(highlightSupport.registry, "match")).toEqual([]);
+      expect(
+        document.querySelectorAll("style[data-nexus-table-search-highlight]").length
+      ).toBe(initialStyleCount);
+    } finally {
+      firstEditor.destroy();
+      secondEditor.destroy();
+      firstContainer.remove();
+      secondContainer.remove();
+      highlightSupport.restore();
+    }
+
+    expect(document.querySelectorAll("style[data-nexus-table-search-highlight]").length).toBe(
+      initialStyleCount
+    );
   });
 
   it("opens a data-test-id annotated search panel from the editor keymap", () => {
