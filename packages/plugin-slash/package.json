@@ -1,6 +1,6 @@
 {
   "name": "@floatboat/nexus-plugin-slash",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,7 +17,8 @@
     "build": "tsup src/index.ts --format esm --dts --clean"
   },
   "dependencies": {
-    "@floatboat/nexus-core": "workspace:*"
+    "@floatboat/nexus-core": "workspace:*",
+    "@floatboat/nexus-plugin-api": "workspace:*"
   },
   "publishConfig": {
     "access": "public",

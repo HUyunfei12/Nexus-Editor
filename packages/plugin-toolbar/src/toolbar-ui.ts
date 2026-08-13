@@ -8,7 +8,7 @@ import {
   insertLink,
   toggleHeading,
   toggleWrap,
-} from "./index";
+} from "./toolbar-commands";
 import {
   toggleBlockquote,
   toggleOrderedList,

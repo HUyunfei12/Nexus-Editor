@@ -22,7 +22,8 @@ const editorPropKeys = [
   "onFocus",
   "onBlur",
   "onAssetUpload",
-  "onReady"
+  "onReady",
+  "runtime"
 ] as const;
 
 function pickEditorConfig(props: EditorProps): UseEditorConfig {
@@ -113,6 +114,10 @@ export const Editor = defineComponent({
     },
     onReady: {
       type: Function as PropType<(editor: EditorAPI) => void>,
+      required: false
+    },
+    runtime: {
+      type: Object as PropType<EditorProps["runtime"]>,
       required: false
     }
   },

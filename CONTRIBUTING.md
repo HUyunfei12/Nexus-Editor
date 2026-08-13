@@ -108,6 +108,8 @@ See `openspec/AGENTS.md` for the full workflow.
 | Live-preview / table / wikilinks | **regression test required** | manual mouse interactions |
 | Docs / config only | — | — |
 
+Changes to the public plugin API or a capability must also be checked against the [native plugin API guide](./docs/plugins/native-plugin-api.zh.md), [Obsidian migration matrix](./docs/plugins/obsidian-migration.zh.md), and [security boundary examples](./docs/plugins/security-and-events.zh.md).
+
 ---
 
 ## 4. Code Style

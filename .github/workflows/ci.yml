@@ -50,6 +50,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Check public API
+        run: pnpm check:api
+
       - name: Run tests
         run: pnpm test
 
@@ -58,6 +61,9 @@ jobs:
 
       - name: Build Electron demo
         run: pnpm build:electron-demo
+
+      - name: Smoke test Electron multi-window runtime
+        run: pnpm --filter @floatboat/nexus-electron-demo smoke:multi-window
 
   publish:
     name: Publish Packages

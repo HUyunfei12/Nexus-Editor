@@ -1,6 +1,6 @@
 import type { EditorAPI } from "@floatboat/nexus-core";
 import { render, waitFor } from "@testing-library/react";
-import { useEffect, useState } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { Editor, useEditor } from "../src/index";
 
@@ -252,5 +252,63 @@ describe("@floatboat/nexus-react", () => {
         "uncontrolled"
       );
     });
+  });
+
+  it("Strict Mode only attaches/detaches a borrowed runtime and never disposes it", async () => {
+    const events: string[] = [];
+    const borrowed = {
+      attachEditor: vi.fn(() => {
+        events.push("attach");
+        return { detach: () => void events.push("detach") };
+      }),
+      dispose: vi.fn(),
+    };
+    const { unmount } = render(
+      <StrictMode>
+        <Editor runtime={{ kind: "borrowed", runtime: borrowed }} />
+      </StrictMode>
+    );
+    await waitFor(() => expect(borrowed.attachEditor).toHaveBeenCalledTimes(2));
+    expect(events).toEqual(["attach", "detach", "attach"]);
+
+    unmount();
+    expect(events).toEqual(["attach", "detach", "attach", "detach"]);
+    expect(borrowed.dispose).not.toHaveBeenCalled();
+  });
+
+  it("disposes an owned runtime after detaching its editor", async () => {
+    const events: string[] = [];
+    const runtime = {
+      attachEditor: () => ({
+        detach: async () => { events.push("detach"); },
+      }),
+      dispose: async () => { events.push("dispose"); },
+    };
+    const createRuntime = vi.fn(() => runtime);
+    const { unmount } = render(
+      <Editor runtime={{ kind: "owned", createRuntime }} />
+    );
+    expect(createRuntime).toHaveBeenCalledOnce();
+    unmount();
+    await waitFor(() => expect(events).toEqual(["detach", "dispose"]));
+  });
+
+  it("attaches multiple editors to one borrowed runtime independently", () => {
+    const attached: EditorAPI[] = [];
+    const detached: EditorAPI[] = [];
+    const runtime = {
+      attachEditor(editor: EditorAPI) {
+        attached.push(editor);
+        return { detach: () => void detached.push(editor) };
+      },
+    };
+    const { unmount } = render(<>
+      <Editor initialValue="first" runtime={{ kind: "borrowed", runtime }} />
+      <Editor initialValue="second" runtime={{ kind: "borrowed", runtime }} />
+    </>);
+    expect(attached).toHaveLength(2);
+    expect(attached[0]).not.toBe(attached[1]);
+    unmount();
+    expect(detached).toEqual(attached);
   });
 });

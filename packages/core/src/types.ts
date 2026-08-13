@@ -162,6 +162,189 @@ export interface EditorSelectionRange {
   head: number;
 }
 
+export type EditorDomEventType =
+  | "copy"
+  | "cut"
+  | "paste"
+  | "beforeinput"
+  | "drop"
+  | "contextmenu"
+  | "keydown";
+
+export interface EditorDomEventMap {
+  copy: ClipboardEvent;
+  cut: ClipboardEvent;
+  paste: ClipboardEvent;
+  beforeinput: InputEvent;
+  drop: DragEvent;
+  contextmenu: MouseEvent;
+  keydown: KeyboardEvent;
+}
+
+export type EditorInputSurface = "document" | "widget" | "table" | "external";
+
+export interface EditorInputTarget {
+  readonly kind: EditorInputSurface;
+  readonly element: HTMLElement;
+  readonly id?: string;
+  getSelectedText(): string;
+  replaceSelection(text: string): boolean;
+  copySelection?(): {
+    readonly text: string | null;
+    readonly html: string | null;
+    readonly files: readonly File[];
+    readonly items: readonly (
+      | { readonly kind: "file"; readonly type: string; readonly file: File }
+      | { readonly kind: "string"; readonly type: string; readonly value: string }
+    )[];
+  };
+}
+
+export interface EditorDomEventHookContext extends EditorEventContext {
+  readonly editorRoot: HTMLElement;
+  readonly surface: EditorInputSurface;
+  readonly inputTarget: EditorInputTarget | null;
+  /** Replace the selection owned by the actual event surface. */
+  replaceTargetSelection(text: string): boolean;
+}
+
+export type EditorDomEventHookResult = "consume" | "pass" | boolean | void;
+
+export type EditorDomEventHook<K extends EditorDomEventType = EditorDomEventType> = (
+  event: EditorDomEventMap[K],
+  context: EditorDomEventHookContext
+) => EditorDomEventHookResult;
+
+export interface EditorDomEventHookOptions {
+  /** Root DOM phase. Defaults to capture so handlers can pre-empt widget and CM6 behavior. */
+  phase?: "capture" | "bubble";
+  /** Bounded integer. Higher values run first, ties use registration order. */
+  priority?: number;
+  /** Receive a read-only notification after another handler consumes the event. */
+  observeAfterConsumed?: boolean;
+  /** Restrict the hook to one or more input surfaces. */
+  surfaces?: readonly EditorInputSurface[];
+}
+
+export interface EditorContributionRegistration {
+  readonly id: string;
+  readonly ownerId: string;
+  readonly disposed: boolean;
+  /** Resolves after the contribution is physically installed in the current EditorView. */
+  readonly ready: Promise<void>;
+  /** Idempotent; resolves after the physical contribution is removed or the editor is destroyed. */
+  dispose(): Promise<void>;
+}
+
+export interface EditorExtensionContributionSink {
+  registerExtension(ownerId: string, extension: Extension): EditorContributionRegistration;
+  registerDomEvent<K extends EditorDomEventType>(
+    ownerId: string,
+    event: K,
+    handler: EditorDomEventHook<K>,
+    options?: EditorDomEventHookOptions
+  ): EditorContributionRegistration;
+  registerInputTarget(
+    ownerId: string,
+    root: HTMLElement,
+    target: Omit<EditorInputTarget, "element">
+  ): EditorContributionRegistration;
+  /** True while IME, a mouse gesture, or an interactive table session blocks reconfiguration. */
+  isInteractionActive(): boolean;
+  /** Request a non-document state refresh after a dynamic snapshot is committed or removed. */
+  refresh(): Promise<void>;
+}
+
+/** Synchronous, already-validated AST transform snapshot installed by a host registry. */
+export interface MarkdownTransformSnapshot {
+  readonly registryId: string;
+  readonly version: number;
+  readonly transform: (tree: Root) => Root;
+}
+
+/** Stable identity paired with one dynamically replaceable Widget definition. */
+export interface WidgetDefinitionContribution {
+  readonly id: string;
+  readonly definition: WidgetDefinition;
+}
+
+/** Immutable Widget definition set installed by a host registry. */
+export interface WidgetDefinitionSnapshot {
+  readonly registryId: string;
+  readonly version: number;
+  readonly definitions: readonly WidgetDefinitionContribution[];
+}
+
+export interface CoreEditorChange {
+  /** Start offset in the document before this transaction. */
+  readonly from: number;
+  /** End offset (exclusive) in the document before this transaction. */
+  readonly to: number;
+  readonly insert: string;
+}
+
+/** Host-independent transaction accepted by the stable editor pipeline. */
+export interface CoreEditorTransaction {
+  readonly changes: readonly CoreEditorChange[];
+  /** Explicit selection in post-change coordinates. Omit to map the previous selection. */
+  readonly selection?: SelectionState;
+  /** Ordered identifiers describing who initiated or transformed the transaction. */
+  readonly origin: readonly string[];
+  readonly userEvent?: string;
+}
+
+export interface CoreEditorTransactionContext {
+  readonly editor: EditorAPI;
+  readonly changes: readonly CoreEditorChange[];
+  readonly selectionBefore: SelectionState;
+  readonly selectionAfter: SelectionState;
+  readonly origin: readonly string[];
+  readonly userEvent?: string;
+}
+
+export interface CoreEditorUpdateContext extends CoreEditorTransactionContext {
+  readonly documentBefore: string;
+  readonly documentAfter: string;
+}
+
+export type CoreEditorTransactionFilterResult =
+  | { readonly action: "accept" }
+  | { readonly action: "reject"; readonly reason?: string }
+  | { readonly action: "replace"; readonly transaction: CoreEditorTransaction };
+
+export type CoreEditorTransactionFilter = (
+  context: CoreEditorTransactionContext
+) => CoreEditorTransactionFilterResult;
+
+export type CoreEditorUpdateListener = (context: CoreEditorUpdateContext) => void;
+
+export interface CoreEditorTransactionHookOptions {
+  /** Bounded integer. Higher values run first, ties use registration order. */
+  readonly priority?: number;
+}
+
+export interface EditorTransactionContributionSink {
+  registerTransactionFilter(
+    ownerId: string,
+    filter: CoreEditorTransactionFilter,
+    options?: CoreEditorTransactionHookOptions
+  ): EditorContributionRegistration;
+  registerUpdateListener(
+    ownerId: string,
+    listener: CoreEditorUpdateListener,
+    options?: CoreEditorTransactionHookOptions
+  ): EditorContributionRegistration;
+}
+
+export interface EditorContributionSink
+  extends EditorExtensionContributionSink,
+    EditorTransactionContributionSink {}
+
+export type CoreEditorTransactionDispatchResult =
+  | { readonly status: "success"; readonly update: CoreEditorUpdateContext }
+  | { readonly status: "rejected"; readonly ownerId: string; readonly reason?: string }
+  | { readonly status: "recursion-limit"; readonly limit: number };
+
 export interface SetDocumentOptions {
   /**
    * When true, skip the onChange pipeline. Use when loading a file from disk
@@ -275,6 +458,14 @@ export interface EditorAPI {
    */
   getPosAtDOM(node: HTMLElement): number | null;
   getDocumentStats(): { characters: number; words: number; lines: number };
+  /** Dynamic, owner-scoped extension and real DOM event registration. */
+  getContributionSink(): EditorContributionSink;
+  /** Dispatch one stable transaction through application filters and update listeners. */
+  dispatchTransaction(transaction: CoreEditorTransaction): CoreEditorTransactionDispatchResult;
+  /** Apply a sequential batch as one atomic CM6 transaction and one stable update. */
+  dispatchTransactions(
+    transactions: readonly CoreEditorTransaction[]
+  ): CoreEditorTransactionDispatchResult;
 }
 
 export interface SlashCommandDef {

@@ -18,7 +18,7 @@ function buildCreateConfig(
   config: UseEditorConfig,
   onDocChange: (doc: string, ast: Root) => void
 ) {
-  const { modelValue, initialValue, onChange, onReady, ...rest } = config;
+  const { modelValue, initialValue, onChange, onReady, runtime: _runtime, ...rest } = config;
 
   return {
     container,
@@ -33,6 +33,10 @@ export function useEditor(config: MaybeRefOrGetter<UseEditorConfig>): UseEditorR
   const editor = shallowRef<ReturnType<typeof createEditor> | null>(null);
   const lastSyncedDocRef = ref<string | null>(null);
   const syncRevision = ref(0);
+  let runtimeAttachment: ReturnType<NonNullable<UseEditorConfig["runtime"]> extends never
+    ? never
+    : import("./types").EditorRuntimeBinding["attachEditor"]> | null = null;
+  let ownedRuntime: import("./types").OwnedEditorRuntimeBinding | null = null;
 
   const resolveConfig = () => toValue(config);
 
@@ -49,6 +53,11 @@ export function useEditor(config: MaybeRefOrGetter<UseEditorConfig>): UseEditorR
     };
 
     const instance = createEditor(buildCreateConfig(containerRef.value, current, onDocChange));
+    const ownership = current.runtime;
+    const runtime = ownership?.kind === "owned"
+      ? (ownedRuntime = ownership.createRuntime())
+      : ownership?.runtime;
+    runtimeAttachment = runtime?.attachEditor(instance, containerRef.value) ?? null;
     editor.value = instance;
 
     lastSyncedDocRef.value = resolveInitialDocument(
@@ -79,7 +88,23 @@ export function useEditor(config: MaybeRefOrGetter<UseEditorConfig>): UseEditorR
   );
 
   onBeforeUnmount(() => {
-    editor.value?.destroy();
+    const instance = editor.value;
+    let detached: void | Promise<void>;
+    try {
+      detached = runtimeAttachment?.detach();
+    } catch {
+      detached = undefined;
+    }
+    instance?.destroy();
+    if (ownedRuntime) {
+      const runtime = ownedRuntime;
+      void Promise.resolve(detached).then(
+        () => runtime.dispose(),
+        () => runtime.dispose()
+      );
+    }
+    runtimeAttachment = null;
+    ownedRuntime = null;
     editor.value = null;
     lastSyncedDocRef.value = null;
   });

@@ -21,6 +21,7 @@ export function Editor({
   onBlur,
   onAssetUpload,
   onReady,
+  runtime,
   ...divProps
 }: EditorProps) {
   const { containerRef } = useEditor({
@@ -41,7 +42,8 @@ export function Editor({
     onFocus,
     onBlur,
     onAssetUpload,
-    onReady
+    onReady,
+    runtime
   });
 
   return <div ref={containerRef} {...divProps} />;

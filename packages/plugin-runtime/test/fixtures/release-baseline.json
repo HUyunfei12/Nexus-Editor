@@ -1,0 +1,20 @@
+{
+  "pluginLifecycle": {
+    "cycles": 25,
+    "expectedActivePerCycle": {
+      "listener": 1,
+      "timer": 1,
+      "registration": 1,
+      "dom": 1
+    },
+    "expectedAfterDisable": 0
+  },
+  "dynamicReconfiguration": {
+    "editors": 3,
+    "cycles": 6,
+    "remarkCommitsPerCycle": 2,
+    "widgetCommitsPerCycle": 2,
+    "maximumElapsedMs": 5000
+  },
+  "notes": "The time limit is a coarse regression guard, not a microbenchmark. It is intentionally much higher than the local baseline so shared CI remains stable. Exact resource counts are deterministic."
+}

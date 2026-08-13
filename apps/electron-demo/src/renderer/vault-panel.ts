@@ -1,5 +1,38 @@
+import type { MenuItemDefinition } from "@floatboat/nexus-plugin-api";
+
+export interface VaultContextMenuRequest {
+  readonly event: MouseEvent;
+  readonly node: VaultNode;
+  readonly items: readonly MenuItemDefinition[];
+}
+
+export interface VaultPanelSnapshot {
+  readonly rootPath: string;
+  readonly displayName: string;
+  readonly nodes: VaultNode[];
+}
+
+/** I/O ownership boundary. Runtime mode supplies a capability-backed backend. */
+export interface VaultPanelBackend {
+  openVault(rootPath: string): Promise<VaultPanelSnapshot | null>;
+  pickVault(): Promise<VaultPanelSnapshot | null>;
+  list(rootPath: string): Promise<VaultNode[]>;
+  read(filePath: string): Promise<DemoFileHandle>;
+  write(filePath: string, content: string): Promise<{ path: string }>;
+  createFile(parentDir: string, name: string): Promise<{ path: string }>;
+  createFolder(parentDir: string, name: string): Promise<{ path: string }>;
+  rename(oldPath: string, newName: string): Promise<{ path: string }>;
+  trash(targetPath: string): Promise<{ ok: boolean }>;
+  onChanged(callback: () => void): () => void;
+}
+
 export interface VaultPanelCallbacks {
   onOpenFile(filePath: string): void;
+  onBeforeVaultOpen?(vaultPath: string): boolean | Promise<boolean>;
+  onVaultOpen?(vaultPath: string): void | Promise<void>;
+  onFileRenamed?(oldPath: string, newPath: string): void | Promise<void>;
+  onFileDeleted?(path: string): void | Promise<void>;
+  onContextMenu?(request: VaultContextMenuRequest): void | Promise<void>;
   onError(message: string): void;
   onStatus(message: string): void;
 }
@@ -9,9 +42,44 @@ export interface VaultPanel {
   openVault(vaultPath: string): Promise<void>;
   promptPickVault(): Promise<void>;
   refresh(): Promise<void>;
+  readFile(filePath: string): Promise<DemoFileHandle>;
+  writeFile(filePath: string, content: string): Promise<{ path: string }>;
+  createFile(parentDir: string, name: string): Promise<{ path: string }>;
   setActiveFile(filePath: string | null): void;
   getVaultPath(): string | null;
   destroy(): void;
+}
+
+export function createLegacyVaultPanelBackend(
+  bridge?: VaultBridge,
+): VaultPanelBackend {
+  const legacyBridge = bridge ?? window.nexusDemo?.vault;
+  if (!legacyBridge) throw new Error("Legacy Vault bridge is unavailable in runtime mode");
+  const snapshot = async (rootPath: string): Promise<VaultPanelSnapshot> => {
+    const nodes = await legacyBridge.list(rootPath);
+    await legacyBridge.setLast(rootPath);
+    return {
+      rootPath,
+      displayName: rootPath.split(/[\\/]/).pop() || "Vault",
+      nodes,
+    };
+  };
+  const backend: VaultPanelBackend = {
+    openVault: snapshot,
+    pickVault: async () => {
+      const picked = await legacyBridge.pick();
+      return picked ? snapshot(picked.path) : null;
+    },
+    list: (rootPath) => legacyBridge.list(rootPath),
+    read: (filePath) => legacyBridge.read(filePath),
+    write: (filePath, content) => legacyBridge.write(filePath, content),
+    createFile: (parentDir, name) => legacyBridge.createFile(parentDir, name),
+    createFolder: (parentDir, name) => legacyBridge.createFolder(parentDir, name),
+    rename: (oldPath, newName) => legacyBridge.rename(oldPath, newName),
+    trash: (targetPath) => legacyBridge.delete(targetPath),
+    onChanged: (callback) => legacyBridge.onChanged(callback),
+  };
+  return Object.freeze(backend);
 }
 
 const PANEL_STYLES = `
@@ -108,15 +176,11 @@ const ACTIVE_STYLES = `
   color: var(--nexus-text, #0366d6);
 `;
 
-interface ContextMenuItem {
-  label: string;
-  onClick: () => void;
-  destructive?: boolean;
-}
-
-function showContextMenu(x: number, y: number, items: ContextMenuItem[]): void {
-  document.querySelectorAll(".nexus-vault-ctxmenu").forEach((el) => el.remove());
-
+function showContextMenu(
+  x: number,
+  y: number,
+  items: readonly MenuItemDefinition[],
+): () => void {
   const menu = document.createElement("div");
   menu.className = "nexus-vault-ctxmenu";
   menu.style.cssText = `
@@ -133,9 +197,20 @@ function showContextMenu(x: number, y: number, items: ContextMenuItem[]): void {
     font-size: 13px;
   `;
 
+  let closeTimer: ReturnType<typeof setTimeout> | null = null;
+  let listening = false;
+  const close = (event?: MouseEvent) => {
+    if (event && menu.contains(event.target as Node)) return;
+    if (closeTimer !== null) clearTimeout(closeTimer);
+    closeTimer = null;
+    if (listening) document.removeEventListener("mousedown", close);
+    listening = false;
+    menu.remove();
+  };
+
   for (const item of items) {
     const btn = document.createElement("button");
-    btn.textContent = item.label;
+    btn.textContent = item.label ?? item.ariaLabel ?? item.tooltip ?? item.id;
     btn.style.cssText = `
       display: block;
       width: 100%;
@@ -144,7 +219,7 @@ function showContextMenu(x: number, y: number, items: ContextMenuItem[]): void {
       padding: 6px 12px;
       cursor: pointer;
       text-align: left;
-      color: ${item.destructive ? "#d73a49" : "inherit"};
+      color: ${item.dangerous ? "#d73a49" : "inherit"};
       font-size: 13px;
       font-family: inherit;
     `;
@@ -155,23 +230,21 @@ function showContextMenu(x: number, y: number, items: ContextMenuItem[]): void {
       btn.style.background = "transparent";
     });
     btn.addEventListener("click", () => {
-      menu.remove();
-      item.onClick();
+      close();
+      void item.action?.({} as never);
     });
     menu.appendChild(btn);
   }
 
   document.body.appendChild(menu);
 
-  setTimeout(() => {
-    const close = (e: MouseEvent) => {
-      if (!menu.contains(e.target as Node)) {
-        menu.remove();
-        document.removeEventListener("mousedown", close);
-      }
-    };
+  closeTimer = setTimeout(() => {
+    closeTimer = null;
+    if (!menu.isConnected) return;
+    listening = true;
     document.addEventListener("mousedown", close);
   }, 0);
+  return () => close();
 }
 
 function folderIcon(open: boolean): string {
@@ -182,7 +255,10 @@ function fileIcon(): string {
   return "\u00B7"; // middle dot
 }
 
-export function createVaultPanel(callbacks: VaultPanelCallbacks): VaultPanel {
+export function createVaultPanel(
+  callbacks: VaultPanelCallbacks,
+  backend: VaultPanelBackend = createLegacyVaultPanelBackend(),
+): VaultPanel {
   const panel = document.createElement("div");
   panel.className = "nexus-vault-panel";
   panel.style.cssText = PANEL_STYLES;
@@ -239,6 +315,7 @@ export function createVaultPanel(callbacks: VaultPanelCallbacks): VaultPanel {
   let activeFile: string | null = null;
   const collapsed = new Set<string>();
   let unsubscribeChanged: (() => void) | null = null;
+  let closeContextMenu: (() => void) | null = null;
 
   function renderEmpty(message: string): void {
     tree.innerHTML = "";
@@ -300,7 +377,7 @@ export function createVaultPanel(callbacks: VaultPanelCallbacks): VaultPanel {
     row.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      openNodeContextMenu(e.clientX, e.clientY, node);
+      openNodeContextMenu(e, node);
     });
 
     if (node.kind === "directory" && !collapsed.has(node.path) && node.children) {
@@ -353,7 +430,11 @@ export function createVaultPanel(callbacks: VaultPanelCallbacks): VaultPanel {
         return;
       }
       try {
-        await window.nexusDemo.vault.rename(node.path, newName);
+        const result = await backend.rename(node.path, newName);
+        if (activeFile === node.path || activeFile?.startsWith(`${node.path.replace(/[\\/]+$/, "")}/`)) {
+          activeFile = `${result.path}${activeFile.slice(node.path.length)}`;
+        }
+        await callbacks.onFileRenamed?.(node.path, result.path);
         await refresh();
       } catch (err) {
         callbacks.onError(err instanceof Error ? err.message : String(err));
@@ -373,33 +454,38 @@ export function createVaultPanel(callbacks: VaultPanelCallbacks): VaultPanel {
     input.addEventListener("blur", () => finish(true));
   }
 
-  function openNodeContextMenu(x: number, y: number, node: VaultNode): void {
+  function openNodeContextMenu(event: MouseEvent, node: VaultNode): void {
     const parentDir = node.kind === "directory" ? node.path : node.path.replace(/[\\/][^\\/]+$/, "");
-    const items: ContextMenuItem[] = [];
+    const items: MenuItemDefinition[] = [];
 
     if (node.kind === "directory") {
       items.push({
+        id: "new-file",
         label: "New file here",
-        onClick: () => createFilePrompt(node.path),
+        action: () => createFilePrompt(node.path),
       });
       items.push({
+        id: "new-folder",
         label: "New folder here",
-        onClick: () => createFolderPrompt(node.path),
+        action: () => createFolderPrompt(node.path),
       });
     } else {
       items.push({
+        id: "open",
         label: "Open",
-        onClick: () => callbacks.onOpenFile(node.path),
+        action: () => callbacks.onOpenFile(node.path),
       });
       items.push({
+        id: "new-file",
         label: "New file in same folder",
-        onClick: () => createFilePrompt(parentDir),
+        action: () => createFilePrompt(parentDir),
       });
     }
 
     items.push({
+      id: "rename",
       label: "Rename",
-      onClick: () => {
+      action: () => {
         const row = tree.querySelector<HTMLElement>(`[data-path="${cssEscape(node.path)}"]`);
         const label = row?.querySelector<HTMLElement>("span:last-child");
         if (row && label) beginInlineRename(row, label, node);
@@ -407,12 +493,21 @@ export function createVaultPanel(callbacks: VaultPanelCallbacks): VaultPanel {
     });
 
     items.push({
+      id: "delete",
       label: "Delete",
-      destructive: true,
-      onClick: () => deleteNode(node),
+      dangerous: true,
+      action: () => deleteNode(node),
     });
 
-    showContextMenu(x, y, items);
+    closeContextMenu?.();
+    closeContextMenu = null;
+    if (callbacks.onContextMenu) {
+      void Promise.resolve(callbacks.onContextMenu({ event, node, items })).catch((error) => {
+        callbacks.onError(error instanceof Error ? error.message : String(error));
+      });
+      return;
+    }
+    closeContextMenu = showContextMenu(event.clientX, event.clientY, items);
   }
 
   function inlineInputRow(opts: {
@@ -484,7 +579,7 @@ export function createVaultPanel(callbacks: VaultPanelCallbacks): VaultPanel {
       selectExt: true,
       iconChar: fileIcon(),
       onCommit: async (name) => {
-        const result = await window.nexusDemo.vault.createFile(parentDir, name);
+        const result = await backend.createFile(parentDir, name);
         await refresh();
         callbacks.onOpenFile(result.path);
       },
@@ -497,7 +592,7 @@ export function createVaultPanel(callbacks: VaultPanelCallbacks): VaultPanel {
       selectExt: false,
       iconChar: folderIcon(true),
       onCommit: async (name) => {
-        await window.nexusDemo.vault.createFolder(parentDir, name);
+        await backend.createFolder(parentDir, name);
         await refresh();
       },
     });
@@ -507,11 +602,12 @@ export function createVaultPanel(callbacks: VaultPanelCallbacks): VaultPanel {
     // In Electron window.confirm may be a no-op; the context menu entry is
     // destructive-styled and requires an explicit click, so we proceed directly.
     try {
-      await window.nexusDemo.vault.delete(node.path);
+      await backend.trash(node.path);
       callbacks.onStatus(`Moved ${node.name} to Trash`);
       if (node.kind === "file" && activeFile === node.path) {
         activeFile = null;
       }
+      await callbacks.onFileDeleted?.(node.path);
       await refresh();
     } catch (err) {
       callbacks.onError(err instanceof Error ? err.message : String(err));
@@ -521,7 +617,7 @@ export function createVaultPanel(callbacks: VaultPanelCallbacks): VaultPanel {
   async function refresh(): Promise<void> {
     if (!vaultPath) return;
     try {
-      currentTree = await window.nexusDemo.vault.list(vaultPath);
+      currentTree = await backend.list(vaultPath);
       renderTree();
     } catch (err) {
       callbacks.onError(err instanceof Error ? err.message : String(err));
@@ -529,26 +625,31 @@ export function createVaultPanel(callbacks: VaultPanelCallbacks): VaultPanel {
   }
 
   async function openVault(nextPath: string): Promise<void> {
-    vaultPath = nextPath;
-    title.textContent = nextPath.split(/[\\/]/).pop() || "Vault";
-    title.title = nextPath;
+    if (await callbacks.onBeforeVaultOpen?.(nextPath) === false) return;
+    const next = await backend.openVault(nextPath);
+    if (!next) return;
+    await commitSnapshot(next);
+  }
+
+  async function commitSnapshot(next: VaultPanelSnapshot): Promise<void> {
+    unsubscribeChanged?.();
+    vaultPath = next.rootPath;
+    currentTree = next.nodes;
+    activeFile = null;
+    title.textContent = next.displayName;
+    title.title = next.rootPath;
     syncButtonEnabled();
     collapsed.clear();
-
-    if (unsubscribeChanged) unsubscribeChanged();
-    unsubscribeChanged = window.nexusDemo.vault.onChanged(() => {
-      void refresh();
-    });
-
-    await refresh();
-    await window.nexusDemo.vault.setLast(nextPath);
+    unsubscribeChanged = backend.onChanged(() => void refresh());
+    renderTree();
+    await callbacks.onVaultOpen?.(next.rootPath);
   }
 
   async function promptPickVault(): Promise<void> {
     try {
-      const picked = await window.nexusDemo.vault.pick();
-      if (!picked) return;
-      await openVault(picked.path);
+      if (await callbacks.onBeforeVaultOpen?.("") === false) return;
+      const picked = await backend.pickVault();
+      if (picked) await commitSnapshot(picked);
     } catch (err) {
       callbacks.onError(err instanceof Error ? err.message : String(err));
     }
@@ -571,13 +672,19 @@ export function createVaultPanel(callbacks: VaultPanelCallbacks): VaultPanel {
     openVault,
     promptPickVault,
     refresh,
+    readFile: (filePath) => backend.read(filePath),
+    writeFile: (filePath, content) => backend.write(filePath, content),
+    createFile: (parentDir, name) => backend.createFile(parentDir, name),
     setActiveFile(filePath) {
       activeFile = filePath;
       renderTree();
     },
     getVaultPath: () => vaultPath,
     destroy() {
-      if (unsubscribeChanged) unsubscribeChanged();
+      closeContextMenu?.();
+      closeContextMenu = null;
+      unsubscribeChanged?.();
+      unsubscribeChanged = null;
       panel.remove();
     },
   };

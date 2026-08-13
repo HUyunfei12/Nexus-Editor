@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 
 import { createGfmPreset } from "../../preset-gfm/src/index";
-import { createEditor } from "../src/index";
+import { createEditor, type EditorAPI } from "../src/index";
 
 beforeAll(() => {
   if (!("getClientRects" in Range.prototype)) {
@@ -50,6 +50,10 @@ function activateTableCell(cell: HTMLElement, clientX = 80, clientY = 40): void 
     clientX,
     clientY,
   }));
+}
+
+async function nextAnimationFrame(): Promise<void> {
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
 describe("live preview", () => {
@@ -1055,6 +1059,45 @@ describe("live preview", () => {
     container.remove();
   });
 
+  it("rejects public transaction re-entry while flushing a table for destroy", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    let reentrantResult: ReturnType<EditorAPI["dispatchTransaction"]> | undefined;
+    let editor!: EditorAPI;
+    editor = createEditor({
+      container,
+      initialValue: "| A | B |\n| --- | --- |\n| old | 2 |",
+      livePreview: true,
+      plugins: [createGfmPreset()],
+      parseDelayMs: 10_000,
+      onChange() {
+        reentrantResult = editor.dispatchTransaction({
+          changes: [{ from: 0, to: 0, insert: "blocked" }],
+          origin: ["destroy-reentry"],
+        });
+      },
+    });
+    const cell = container.querySelectorAll<HTMLElement>("tr")[2]?.querySelectorAll<HTMLElement>(".nexus-cell")[0];
+    expect(cell).not.toBeUndefined();
+    activateTableCell(cell!);
+    cell!.textContent = "edited";
+    cell!.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      inputType: "insertText",
+      data: "edited",
+    }));
+
+    editor.destroy();
+
+    expect(reentrantResult).toEqual({
+      status: "rejected",
+      ownerId: "host",
+      reason: "editor-destroyed",
+    });
+    expect(container.querySelector(".cm-editor")).toBeNull();
+    container.remove();
+  });
+
   it("keeps a dirty cell edit when its column is dragged", async () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
@@ -1339,6 +1382,179 @@ describe("live preview", () => {
     expect(copied["text/plain"]).toBe("1\t2");
     editor.destroy();
     container.remove();
+  });
+
+  it("defers dynamic reconfiguration while a table range remains active", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const editor = createEditor({
+      container,
+      initialValue: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+      livePreview: true,
+      plugins: [createGfmPreset()],
+    });
+    const wrapper = container.querySelector<HTMLElement>(".nexus-table-wrapper");
+    const cells = container.querySelectorAll<HTMLElement>("tr")[2]
+      ?.querySelectorAll<HTMLElement>(".nexus-cell");
+    const firstCell = cells?.[0];
+    const secondCell = cells?.[1];
+    expect(wrapper).not.toBeNull();
+    expect(firstCell).not.toBeUndefined();
+    expect(secondCell).not.toBeUndefined();
+    firstCell!.getBoundingClientRect = () => new DOMRect(0, 0, 50, 30);
+    secondCell!.getBoundingClientRect = () => new DOMRect(50, 0, 50, 30);
+
+    firstCell!.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 25,
+      clientY: 15,
+    }));
+    document.dispatchEvent(new MouseEvent("mousemove", {
+      bubbles: true,
+      button: 0,
+      clientX: 75,
+      clientY: 15,
+    }));
+    document.dispatchEvent(new MouseEvent("mouseup", {
+      bubbles: true,
+      button: 0,
+      clientX: 75,
+      clientY: 15,
+    }));
+
+    let installed = 0;
+    const registration = editor.getContributionSink().registerExtension(
+      "table-range-barrier",
+      ViewPlugin.define(() => {
+        installed += 1;
+        return {};
+      }),
+    );
+    await nextAnimationFrame();
+    await nextAnimationFrame();
+
+    expect(editor.getContributionSink().isInteractionActive()).toBe(true);
+    expect(installed).toBe(0);
+    expect(container.querySelector(".nexus-table-wrapper")).toBe(wrapper);
+
+    document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    await registration.ready;
+    expect(editor.getContributionSink().isInteractionActive()).toBe(false);
+    expect(installed).toBe(1);
+    expect(container.querySelector(".nexus-table-wrapper")).toBe(wrapper);
+
+    await registration.dispose();
+    editor.destroy();
+    container.remove();
+  });
+
+  it("defers dynamic reconfiguration for the full column-grip drag", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const editor = createEditor({
+      container,
+      initialValue: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+      livePreview: true,
+      plugins: [createGfmPreset()],
+    });
+    const wrapper = container.querySelector<HTMLElement>(".nexus-table-wrapper");
+    const headers = container.querySelectorAll<HTMLElement>("tr")[1]
+      ?.querySelectorAll<HTMLElement>(".nexus-cell");
+    const grip = container.querySelectorAll<HTMLElement>(".nexus-col-grip")[0];
+    expect(wrapper).not.toBeNull();
+    expect(grip).not.toBeUndefined();
+    headers![0].getBoundingClientRect = () => new DOMRect(0, 0, 50, 30);
+    headers![1].getBoundingClientRect = () => new DOMRect(50, 0, 50, 30);
+
+    grip.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 25,
+      clientY: 5,
+    }));
+    let installed = 0;
+    const registration = editor.getContributionSink().registerExtension(
+      "table-grip-barrier",
+      ViewPlugin.define(() => {
+        installed += 1;
+        return {};
+      }),
+    );
+    await nextAnimationFrame();
+    expect(editor.getContributionSink().isInteractionActive()).toBe(true);
+    expect(installed).toBe(0);
+    expect(container.querySelector(".nexus-table-wrapper")).toBe(wrapper);
+
+    document.dispatchEvent(new MouseEvent("mouseup", {
+      bubbles: true,
+      button: 0,
+      clientX: 25,
+      clientY: 5,
+    }));
+    await registration.ready;
+    expect(editor.getContributionSink().isInteractionActive()).toBe(false);
+    expect(installed).toBe(1);
+    expect(container.querySelector(".nexus-table-wrapper")).toBe(wrapper);
+
+    await registration.dispose();
+    editor.destroy();
+    container.remove();
+  });
+
+  it("supports grip selection, outside cancellation, and Delete or Backspace", () => {
+    const container = document.createElement("div");
+    const outside = document.createElement("button");
+    document.body.append(container, outside);
+    const editor = createEditor({
+      container,
+      initialValue: "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |",
+      livePreview: true,
+      plugins: [createGfmPreset()],
+    });
+    const wrapper = container.querySelector<HTMLElement>(".nexus-table-wrapper")!;
+    const firstColGrip = container.querySelectorAll<HTMLElement>(".nexus-col-grip")[0];
+    firstColGrip.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    outside.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    wrapper.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Delete",
+      bubbles: true,
+      cancelable: true,
+    }));
+    expect(editor.getDocument()).toContain("| A | B |");
+
+    firstColGrip.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const deleteColumn = new KeyboardEvent("keydown", {
+      key: "Delete",
+      bubbles: true,
+      cancelable: true,
+    });
+    wrapper.dispatchEvent(deleteColumn);
+    expect(deleteColumn.defaultPrevented).toBe(true);
+    expect(editor.getDocument()).not.toContain(" A ");
+    expect(editor.getDocument()).toContain(" B ");
+
+    const nextWrapper = container.querySelector<HTMLElement>(".nexus-table-wrapper")!;
+    const firstBodyRow = Array.from(container.querySelectorAll<HTMLElement>("tr"))
+      .find((row) => row.textContent?.includes("2"));
+    const rowGrip = firstBodyRow?.querySelector<HTMLElement>(".nexus-row-grip");
+    expect(rowGrip).not.toBeNull();
+    rowGrip!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const deleteRow = new KeyboardEvent("keydown", {
+      key: "Backspace",
+      bubbles: true,
+      cancelable: true,
+    });
+    nextWrapper.dispatchEvent(deleteRow);
+    expect(deleteRow.defaultPrevented).toBe(true);
+    expect(editor.getDocument()).not.toContain("| 2 |");
+    expect(editor.getDocument()).toContain("| 4 |");
+
+    editor.destroy();
+    container.remove();
+    outside.remove();
   });
 
   it("allows native text selection inside a table cell without entering edit mode", () => {

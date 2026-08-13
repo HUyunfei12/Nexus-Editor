@@ -3,10 +3,15 @@ import {
   createWikilinksPlugin,
   type EditorAPI,
   type LivePreviewRenderContext,
+  type NexusPlugin,
 } from "@floatboat/nexus-core";
 import { createGfmPreset } from "@floatboat/nexus-preset-gfm";
 import { createHistoryPlugin } from "@floatboat/nexus-plugin-history";
-import { createToolbarPlugin, createToolbarUI, type ToolbarUI } from "@floatboat/nexus-plugin-toolbar";
+import {
+  createToolbarPlugin,
+  createToolbarUI,
+  type ToolbarUI,
+} from "@floatboat/nexus-plugin-toolbar";
 import { createSearchPlugin } from "@floatboat/nexus-plugin-search";
 import { createSlashMenuUI, type SlashMenuUI } from "@floatboat/nexus-plugin-slash";
 import {
@@ -34,35 +39,10 @@ function parseImageSize(raw: string): { alt: string; width?: number; height?: nu
   };
 }
 
-// Rewrite relative image URLs to the custom nexus-vault:// scheme registered
-// in the main process. Absolute URLs (http, https, data, etc) pass through.
-function resolveImageSrc(
-  url: string,
-  activeFile: string | null,
-  vaultRoot: string | null
-): string {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//")) return url;
-  if (!activeFile || !vaultRoot) return url;
-
-  const sep = activeFile.includes("\\") && !activeFile.includes("/") ? "\\" : "/";
-  const normActive = activeFile.replace(/\\/g, "/");
-  const normVault = vaultRoot.replace(/\\/g, "/").replace(/\/+$/, "");
-  const lastSlash = normActive.lastIndexOf("/");
-  const activeDir = lastSlash >= 0 ? normActive.slice(0, lastSlash) : "";
-  const joined = activeDir + "/" + url.replace(/\\/g, "/");
-
-  const parts: string[] = [];
-  for (const p of joined.split("/")) {
-    if (p === "" || p === ".") continue;
-    if (p === "..") parts.pop();
-    else parts.push(p);
-  }
-  const absNorm = (joined.startsWith("/") ? "/" : "") + parts.join("/");
-
-  if (absNorm !== normVault && !absNorm.startsWith(normVault + "/")) return url;
-  const rel = absNorm.slice(normVault.length + 1);
-  const encoded = rel.split("/").map(encodeURIComponent).join("/");
-  return `nexus-vault://vault/${encoded}`;
+// Only ResourcesCapability may mint nexus-vault URLs. The legacy editor path
+// leaves relative sources renderer-relative instead of bypassing that lifecycle.
+export function resolveImageSrc(url: string): string {
+  return url;
 }
 
 export interface EditorShellOptions {
@@ -76,15 +56,28 @@ export interface EditorShellOptions {
   resolveWikilink?(name: string): string | null;
   /** Returns autocomplete candidates for the query after `[[`. */
   suggestWikilinks?(query: string): string[];
+  /**
+   * Selects the single owner for migrated editor contributions. Runtime mode
+   * leaves toolbar, slash-menu and word-count lifecycle to PluginManager.
+   */
+  contributionMode?: "legacy" | "runtime";
+  /** Per-feature flags supplied by the reference-plugin boot plan. */
+  contributionFeatures?: Readonly<{
+    toolbar: boolean;
+    slashMenu: boolean;
+    wordCount: boolean;
+  }>;
+  /** Extra static contributions selected by the host boot plan. */
+  editorContributions?: readonly NexusPlugin[];
 }
 
 export interface EditorShell {
   editor: EditorAPI;
-  toolbar: ToolbarUI;
+  toolbar: ToolbarUI | null;
   /** The floating slash-command menu mounted on document.body. */
-  slashMenu: SlashMenuUI;
+  slashMenu: SlashMenuUI | null;
   /** Markdown-aware word-count plugin (handle + status bar). */
-  wordcount: WordCountPlugin;
+  wordcount: WordCountPlugin | null;
   applySettings(settings: EditorSettings): void;
   loadDocument(content: string): void;
   destroy(): void;
@@ -99,7 +92,11 @@ export function createEditorShell(options: EditorShellOptions): EditorShell {
     onWikilinkNavigate,
     resolveWikilink,
     suggestWikilinks,
+    contributionMode = "legacy",
+    contributionFeatures = { toolbar: true, slashMenu: true, wordCount: true },
+    editorContributions = [],
   } = options;
+  const runtimeManaged = contributionMode === "runtime";
 
   // Forward ref so the image renderer (built BEFORE createEditor returns)
   // can dispatch selection changes through the editor API after it exists.
@@ -115,9 +112,11 @@ export function createEditorShell(options: EditorShellOptions): EditorShell {
   // change — no double parsing — and mounts an ARIA-live status bar in
   // the editor container's footer. Bound to the editor instance via
   // `attachWordCountPlugin` once `createEditor` returns.
-  const wordcount = createWordCountPlugin({
-    statusBar: { container, classPrefix: "nexus-wordcount" },
-  });
+  const wordcount = runtimeManaged || !contributionFeatures.wordCount
+    ? null
+    : createWordCountPlugin({
+        statusBar: { container, classPrefix: "nexus-wordcount" },
+      });
 
   // No more parser worker. Live-preview drives off `syntaxTree(state)` from
   // @codemirror/lang-markdown (incremental, intrinsic to EditorState), and
@@ -139,10 +138,11 @@ export function createEditorShell(options: EditorShellOptions): EditorShell {
     plugins: [
       createGfmPreset(),
       createHistoryPlugin(),
-      createToolbarPlugin(),
+      ...(!runtimeManaged && contributionFeatures.toolbar ? [createToolbarPlugin()] : []),
       createSearchPlugin(),
       wikilinksPlugin,
-      wordcount,
+      ...(wordcount ? [wordcount] : []),
+      ...editorContributions,
     ],
     livePreview: settings.livePreview
       ? {
@@ -167,7 +167,7 @@ export function createEditorShell(options: EditorShellOptions): EditorShell {
               wrapper.setAttribute("data-live-preview-image", node.url);
 
               const img = document.createElement("img");
-              img.src = resolveImageSrc(node.url, state.activeFile, state.vaultPath);
+              img.src = resolveImageSrc(node.url);
               img.alt = alt;
               if (node.title) img.title = node.title;
               img.referrerPolicy = "no-referrer";
@@ -332,19 +332,23 @@ export function createEditorShell(options: EditorShellOptions): EditorShell {
 
   editorRef.current = editor;
 
-  const toolbar = createToolbarUI(editor);
-  container.insertBefore(toolbar.element, container.firstChild);
+  const toolbar = runtimeManaged || !contributionFeatures.toolbar
+    ? null
+    : createToolbarUI(editor);
+  if (toolbar) container.insertBefore(toolbar.element, container.firstChild);
 
   // The slash menu owns its own DOM root mounted on document.body so
   // it can overflow the editor's clipping context (panels, scroll
   // ancestors). Its lifecycle is tied to the shell — destroyed below.
-  const slashMenu = createSlashMenuUI(editor);
+  const slashMenu = runtimeManaged || !contributionFeatures.slashMenu
+    ? null
+    : createSlashMenuUI(editor);
 
   // Bind the wordcount plugin now that the editor is fully constructed.
   // The plugin's status-bar widget mounts on its first emission (next
   // microtask), so it's already wired by the time the user sees the
   // first paint.
-  attachWordCountPlugin(wordcount, editor);
+  if (wordcount) attachWordCountPlugin(wordcount, editor);
 
   return {
     editor,
@@ -373,9 +377,9 @@ export function createEditorShell(options: EditorShellOptions): EditorShell {
         `${(t1 - t0).toFixed(1)}ms`, { bytes: content.length });
     },
     destroy() {
-      wordcount.destroy();
-      slashMenu.destroy();
-      toolbar.destroy();
+      wordcount?.destroy();
+      slashMenu?.destroy();
+      toolbar?.destroy();
       editor.destroy();
     },
   };

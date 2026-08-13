@@ -1,6 +1,6 @@
 {
   "name": "@floatboat/nexus-plugin-toolbar",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@floatboat/nexus-core": "workspace:*",
+    "@floatboat/nexus-plugin-api": "workspace:*",
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.36.1"
   },

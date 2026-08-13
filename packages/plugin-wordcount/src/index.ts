@@ -24,3 +24,11 @@ export {
   type StatusBarOptions,
   type WordCountLabels
 } from "./status-bar";
+
+export {
+  WordCountLifecyclePlugin,
+  wordCountLifecyclePluginManifest,
+  type EditorWordCountListener,
+  type EditorWordCountState,
+  type WordCountLifecyclePluginOptions,
+} from "./runtime-plugin";

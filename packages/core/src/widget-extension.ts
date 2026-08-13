@@ -9,7 +9,14 @@ import {
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { Content, Parent, Root } from "mdast";
 
+import { editorContributionRefreshEffect } from "./dynamic-contributions";
 import type { ParserLike, WidgetDefinition, WidgetRenderContext } from "./types";
+import {
+  applyMarkdownTransformSnapshots,
+  getMarkdownTransformRevision,
+  getWidgetDefinitionContributions,
+  getWidgetDefinitionRevision,
+} from "./markdown-contributions";
 
 const COMPOSITION_REDECORATE_DELAY_MS = 60;
 
@@ -148,14 +155,19 @@ class NexusWidget extends WidgetType {
 }
 
 function buildWidgetDecorations(
+  state: import("@codemirror/state").EditorState,
   doc: string,
   selection: readonly SelectionRange[],
   parser: ParserLike,
   widgets: WidgetDefinition[],
   viewRef: { current: EditorView | null }
 ): DecorationSet {
-  const ast = parseDocument(parser, doc);
-  const ranges = collectWidgetRanges(ast, doc, selection, widgets);
+  const dynamicWidgets = getWidgetDefinitionContributions(state).map((item) => item.definition);
+  const definitions = [...widgets, ...dynamicWidgets];
+  if (definitions.length === 0) return Decoration.none;
+
+  const ast = applyMarkdownTransformSnapshots(state, parseDocument(parser, doc));
+  const ranges = collectWidgetRanges(ast, doc, selection, definitions);
   const decos: Range<Decoration>[] = [];
 
   for (const range of ranges) {
@@ -182,42 +194,42 @@ export function createWidgetExtension(
   parser: ParserLike,
   widgets: WidgetDefinition[]
 ): Extension[] {
-  if (widgets.length === 0) return [];
-
   const viewRef: { current: EditorView | null } = { current: null };
   const rebuildAfterComposition = StateEffect.define<null>();
 
+  const build = (state: import("@codemirror/state").EditorState): DecorationSet => {
+    return buildWidgetDecorations(
+      state,
+      state.doc.toString(),
+      state.selection.ranges,
+      parser,
+      widgets,
+      viewRef,
+    );
+  };
+
   const field = StateField.define<DecorationSet>({
     create(state) {
-      return buildWidgetDecorations(
-        state.doc.toString(),
-        state.selection.ranges,
-        parser,
-        widgets,
-        viewRef
-      );
+      return build(state);
     },
     update(decos: DecorationSet, tr: Transaction) {
       if (tr.effects.some((effect) => effect.is(rebuildAfterComposition))) {
-        return buildWidgetDecorations(
-          tr.state.doc.toString(),
-          tr.state.selection.ranges,
-          parser,
-          widgets,
-          viewRef
-        );
+        return build(tr.state);
+      }
+      if (tr.effects.some((effect) => effect.is(editorContributionRefreshEffect))) {
+        return build(tr.state);
+      }
+      if (
+        getMarkdownTransformRevision(tr.startState) !== getMarkdownTransformRevision(tr.state) ||
+        getWidgetDefinitionRevision(tr.startState) !== getWidgetDefinitionRevision(tr.state)
+      ) {
+        return build(tr.state);
       }
       if (tr.isUserEvent("input.type.compose")) {
         return tr.docChanged ? decos.map(tr.changes) : decos;
       }
       if (tr.docChanged || tr.selection) {
-        return buildWidgetDecorations(
-          tr.state.doc.toString(),
-          tr.state.selection.ranges,
-          parser,
-          widgets,
-          viewRef
-        );
+        return build(tr.state);
       }
       return decos;
     },

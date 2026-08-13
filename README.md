@@ -199,6 +199,8 @@ A real Electron app with file IO, live preview, and every plugin enabled — the
 
 ## 📖 API Reference
 
+Plugin platform documentation (Chinese): [native plugin API](./docs/plugins/native-plugin-api.zh.md) · [Obsidian migration matrix](./docs/plugins/obsidian-migration.zh.md) · [legacy migration](./docs/plugins/legacy-plugin-migration.zh.md) · [events and security boundaries](./docs/plugins/security-and-events.zh.md)
+
 <details>
 <summary><b>Editor API</b> — methods and events</summary>
 

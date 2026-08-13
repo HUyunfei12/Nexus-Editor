@@ -1,0 +1,18 @@
+[
+  "BundledReferencePlugin",
+  "LegacyReferenceFixture",
+  "LegacyReferencePluginId",
+  "OBSIDIAN_SAMPLE_PLUGIN_COMMIT",
+  "ObsidianSamplePortManifestOptions",
+  "ObsidianSamplePortPlugin",
+  "ObsidianSamplePortSettings",
+  "ReferencePluginBootPlan",
+  "ReferencePluginFeatureFlags",
+  "bundledReferencePlugins",
+  "countLegacyContributions",
+  "createObsidianSamplePortManifest",
+  "createReferencePluginBootPlan",
+  "findBundledReferencePlugin",
+  "legacyReferenceFixtures",
+  "obsidianSamplePortManifest"
+]

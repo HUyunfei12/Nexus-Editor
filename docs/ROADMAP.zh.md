@@ -40,6 +40,8 @@
 
 ## 4. 插件系统
 
+插件平台主线文档：[原生 API](./plugins/native-plugin-api.zh.md) · [Obsidian 迁移矩阵](./plugins/obsidian-migration.zh.md) · [legacy 迁移](./plugins/legacy-plugin-migration.zh.md) · [事件与安全](./plugins/security-and-events.zh.md)。已完成的设计与验收记录归档于 [`add-plugin-platform-api`](../openspec/changes/archive/2026-08-13-add-plugin-platform-api/)。
+
 | # | 功能 | 归属包 | 优先级 | 状态 | 需要 OpenSpec | 备注 |
 |---|---|---|---|---|---|---|
 | 9  | Widget API 标准化 | `core` | P1 | planned | 是 | 现有 widget 已多次踩坑（见 CLAUDE.md），需先定 spec |

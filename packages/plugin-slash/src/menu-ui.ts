@@ -60,11 +60,18 @@ export interface SlashMenuUIOptions {
    * history; an options object may provide host-injected storage.
    */
   history?: SlashCommandHistoryConfig;
+  /**
+   * Register the legacy document-level key listener. Runtime hosts set this to
+   * false and route keys through the EditorHost root dispatcher instead.
+   */
+  manageKeyboard?: boolean;
 }
 
 export interface SlashMenuUI {
   /** The menu root element. Already mounted in the configured container. */
   element: HTMLElement;
+  /** Handle one key through the menu state machine; true means consumed. */
+  handleKeydown(event: KeyboardEvent): boolean;
   /**
    * Detach all DOM listeners, remove the element from its parent, and
    * stop reacting to editor events. Safe to call multiple times.
@@ -89,11 +96,14 @@ export function createSlashMenuUI(
   const prefix = options.classPrefix ?? DEFAULT_PREFIX;
   const offset = options.offset ?? DEFAULT_OFFSET;
   const container = options.container ?? document.body;
+  const ownerDocument = container.ownerDocument;
+  const ownerWindow = ownerDocument.defaultView;
+  if (!ownerWindow) throw new TypeError("Slash menu container must belong to a window");
   const menuId = generateId(prefix);
   const commandHistory = createSlashCommandHistory(options.history);
 
   // ── DOM scaffolding ──────────────────────────────────────────────
-  const root = document.createElement("div");
+  const root = ownerDocument.createElement("div");
   root.className = `${prefix}-menu`;
   root.id = menuId;
   root.setAttribute("role", "listbox");
@@ -149,7 +159,7 @@ export function createSlashMenuUI(
     if (commands.length === 0) {
       root.replaceChildren();
       itemEls = [];
-      const empty = document.createElement("div");
+      const empty = ownerDocument.createElement("div");
       empty.className = `${prefix}-menu__empty`;
       empty.textContent = "No matches";
       root.appendChild(empty);
@@ -159,13 +169,13 @@ export function createSlashMenuUI(
 
     // Reconcile existing item nodes. Append missing, hide extras.
     while (itemEls.length < commands.length) {
-      const item = document.createElement("div");
+      const item = ownerDocument.createElement("div");
       item.className = `${prefix}-menu__item`;
       item.setAttribute("role", "option");
       item.id = `${menuId}-item-${itemEls.length}`;
-      const title = document.createElement("div");
+      const title = ownerDocument.createElement("div");
       title.className = `${prefix}-menu__title`;
-      const desc = document.createElement("div");
+      const desc = ownerDocument.createElement("div");
       desc.className = `${prefix}-menu__description`;
       item.appendChild(title);
       item.appendChild(desc);
@@ -234,8 +244,8 @@ export function createSlashMenuUI(
     root.style.top = `${bottom + offset}px`;
 
     const rect = root.getBoundingClientRect();
-    const winHeight = typeof window !== "undefined" ? window.innerHeight : 0;
-    const winWidth = typeof window !== "undefined" ? window.innerWidth : 0;
+    const winHeight = ownerWindow?.innerHeight ?? 0;
+    const winWidth = ownerWindow?.innerWidth ?? 0;
 
     // Vertical flip: if the menu would clip below the viewport, render
     // above the caret instead. JSDOM returns zero-sized rects, so this
@@ -356,10 +366,8 @@ export function createSlashMenuUI(
     dismiss();
   }
 
-  function onKeyDown(e: KeyboardEvent): void {
-    if (destroyed) return;
-    if (!isMenuOpen()) return;
-    if (isComposing) return;
+  function onKeyDown(e: KeyboardEvent): boolean {
+    if (destroyed || !isMenuOpen() || isComposing) return false;
 
     const len = visibleCommands.length;
 
@@ -371,7 +379,7 @@ export function createSlashMenuUI(
           highlight = (highlight + 1) % len;
           applyHighlight();
         }
-        return;
+        return true;
       case "ArrowUp":
         e.preventDefault();
         e.stopPropagation();
@@ -379,7 +387,7 @@ export function createSlashMenuUI(
           highlight = (highlight - 1 + len) % len;
           applyHighlight();
         }
-        return;
+        return true;
       case "Home":
         e.preventDefault();
         e.stopPropagation();
@@ -387,7 +395,7 @@ export function createSlashMenuUI(
           highlight = 0;
           applyHighlight();
         }
-        return;
+        return true;
       case "End":
         e.preventDefault();
         e.stopPropagation();
@@ -395,7 +403,7 @@ export function createSlashMenuUI(
           highlight = len - 1;
           applyHighlight();
         }
-        return;
+        return true;
       case "Enter":
       case "Tab":
         // Empty results: swallow Enter so the editor doesn't insert a
@@ -404,17 +412,22 @@ export function createSlashMenuUI(
         e.stopPropagation();
         if (len === 0) {
           dismiss();
-          return;
+          return true;
         }
         confirm();
-        return;
+        return true;
       case "Escape":
         e.preventDefault();
         e.stopPropagation();
         dismiss();
-        return;
+        return true;
     }
+    return false;
   }
+
+  const documentKeyDown = (event: KeyboardEvent): void => {
+    onKeyDown(event);
+  };
 
   function onDocumentPointerDown(e: Event): void {
     if (destroyed) return;
@@ -447,33 +460,38 @@ export function createSlashMenuUI(
 
   // Capture phase: we need to handle Enter / Escape / ArrowKeys before
   // CM6's own keymap binds them to caret motion.
-  document.addEventListener("keydown", onKeyDown, true);
+  if (options.manageKeyboard !== false) {
+    ownerDocument.addEventListener("keydown", documentKeyDown, true);
+  }
   // Use both mousedown and pointerdown so we close as early as
   // possible regardless of input modality. Idempotent dismiss handles
   // double invocations safely.
-  document.addEventListener("mousedown", onDocumentPointerDown, true);
-  if (typeof PointerEvent !== "undefined") {
-    document.addEventListener("pointerdown", onDocumentPointerDown, true);
+  ownerDocument.addEventListener("mousedown", onDocumentPointerDown, true);
+  if (typeof ownerWindow.PointerEvent !== "undefined") {
+    ownerDocument.addEventListener("pointerdown", onDocumentPointerDown, true);
   }
-  document.addEventListener("compositionstart", onCompositionStart, true);
-  document.addEventListener("compositionend", onCompositionEnd, true);
-  window.addEventListener("resize", onWindowResize);
+  ownerDocument.addEventListener("compositionstart", onCompositionStart, true);
+  ownerDocument.addEventListener("compositionend", onCompositionEnd, true);
+  ownerWindow.addEventListener("resize", onWindowResize);
 
   return {
     element: root,
+    handleKeydown: onKeyDown,
     destroy() {
       if (destroyed) return;
       destroyed = true;
       editor.off("slashMenuChange", onSlashMenuChange);
       editor.off("blur", onEditorBlur);
-      document.removeEventListener("keydown", onKeyDown, true);
-      document.removeEventListener("mousedown", onDocumentPointerDown, true);
-      if (typeof PointerEvent !== "undefined") {
-        document.removeEventListener("pointerdown", onDocumentPointerDown, true);
+      if (options.manageKeyboard !== false) {
+        ownerDocument.removeEventListener("keydown", documentKeyDown, true);
       }
-      document.removeEventListener("compositionstart", onCompositionStart, true);
-      document.removeEventListener("compositionend", onCompositionEnd, true);
-      window.removeEventListener("resize", onWindowResize);
+      ownerDocument.removeEventListener("mousedown", onDocumentPointerDown, true);
+      if (typeof ownerWindow.PointerEvent !== "undefined") {
+        ownerDocument.removeEventListener("pointerdown", onDocumentPointerDown, true);
+      }
+      ownerDocument.removeEventListener("compositionstart", onCompositionStart, true);
+      ownerDocument.removeEventListener("compositionend", onCompositionEnd, true);
+      ownerWindow.removeEventListener("resize", onWindowResize);
       if (root.parentNode) root.parentNode.removeChild(root);
       itemEls = [];
       currentState = null;

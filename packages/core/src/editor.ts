@@ -15,6 +15,13 @@ import remarkRehype from "remark-rehype";
 import { unified } from "unified";
 
 import { EventEmitter } from "./event-emitter";
+import { DynamicEditorContributionSink } from "./dynamic-contributions";
+import { CoreEditorTransactionPipeline } from "./transaction-pipeline";
+import {
+  applyMarkdownTransformSnapshots,
+  dynamicWidgetDefinitionExtension,
+  getMarkdownTransformRevision,
+} from "./markdown-contributions";
 import { createLivePreviewExtension } from "./live-preview";
 import { flushPendingTableEdits } from "./live-preview-table";
 import { createMarkdownLanguageSupport } from "./lezer-markdown";
@@ -31,6 +38,8 @@ import type {
   EditorAPI,
   EditorCommand,
   EditorConfig,
+  EditorContributionSink,
+  CoreEditorTransaction,
   EditorEventContext,
   EditorEventHandler,
   EditorEventMap,
@@ -130,13 +139,18 @@ function lezerAstFromAnywhere(
   return lezerStringToMdast(fallbackMarkdown);
 }
 
-function markdownToHtml(markdown: string, plugins: NexusPlugin[]): string {
+function markdownToHtml(
+  markdown: string,
+  plugins: NexusPlugin[],
+  applyDynamicTransforms: (tree: Root) => Root,
+): string {
   const processor = unified().use(remarkParse);
   for (const plugin of plugins) {
     for (const rp of plugin.remarkPlugins ?? []) {
       processor.use(rp);
     }
   }
+  processor.use(() => (tree) => applyDynamicTransforms(tree as Root));
   processor.use(remarkRehype).use(rehypeStringify);
   return String(processor.processSync(markdown));
 }
@@ -270,19 +284,29 @@ export function createEditor(config: EditorConfig): EditorAPI {
   // events all use the Lezer path below, so avoid paying this startup cost in
   // the common no-widget case (including the Electron demo).
   const fallbackParser = !customParser && widgetDefs.length > 0 ? createParser(plugins) : null;
-  const widgetParser: ParserLike | null = customParser ?? fallbackParser;
+  const widgetParser: ParserLike = customParser ?? fallbackParser ?? {
+    parse: lezerStringToMdast,
+  };
   // Built only when the user passes remarkPlugins AND no custom parser.
   // Custom-parser callers run their plugins inside `parser.parse`, so the
   // transform pass would double-apply.
   const hasRemarkPlugins = plugins.some((plugin) => (plugin.remarkPlugins?.length ?? 0) > 0);
   const transformProcessor = !customParser && hasRemarkPlugins ? createTransformProcessor(plugins) : null;
-  const transformAst = (ast: Root): Root =>
-    transformProcessor ? transformProcessor.runSync(ast) : ast;
+  // Forward ref so AST transforms can read dynamic contribution facets after
+  // the EditorView exists while retaining a headless initial parse.
+  const viewRef: { current: EditorView | null } = { current: null };
+  const transformAst = (ast: Root): Root => {
+    const staticallyTransformed = transformProcessor ? transformProcessor.runSync(ast) : ast;
+    return viewRef.current
+      ? applyMarkdownTransformSnapshots(viewRef.current.state, staticallyTransformed)
+      : staticallyTransformed;
+  };
   const locale = resolveLocale(config.locale);
   const parseDelayMs = config.parseDelayMs ?? 0;
   const emitter = new EventEmitter<EditorEventMap>();
   let destroyed = false;
   let destroying = false;
+  let flushingTableEditsForDestroy = false;
   let focused = false;
   let parseTimer: ReturnType<typeof setTimeout> | undefined;
   let compositionFlushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -298,10 +322,11 @@ export function createEditor(config: EditorConfig): EditorAPI {
   let currentAst = customParser
     ? parseDocument(customParser, config.initialValue ?? "")
     : transformAst(lezerStringToMdast(config.initialValue ?? ""));
-  // Forward ref so emitChange/setDocument can run lezerTreeToMdast against
-  // the live EditorState once the view is constructed.
-  const viewRef: { current: EditorView | null } = { current: null };
   let api!: EditorAPI;
+  let dynamicContributionSink!: DynamicEditorContributionSink;
+  let transactionPipeline!: CoreEditorTransactionPipeline;
+  let contributionSink!: EditorContributionSink;
+  let lastMarkdownTransformRevision = "";
 
   function setFocused(next: boolean) {
     if (destroyed || focused === next) {
@@ -439,7 +464,10 @@ export function createEditor(config: EditorConfig): EditorAPI {
     // silent 模式下仍同步 currentAst，使 getAst() / getTableOfContents() 反映已载入文件。
     if (silent) {
       if (customParser) {
-        currentAst = parseDocument(customParser, next);
+        currentAst = applyMarkdownTransformSnapshots(
+          view.state,
+          parseDocument(customParser, next),
+        );
       } else {
         currentAst = transformAst(lezerAstFromAnywhere(viewRef, next));
       }
@@ -542,6 +570,13 @@ export function createEditor(config: EditorConfig): EditorAPI {
 
   const view = new EditorView({
     parent: config.container,
+    dispatchTransactions(transactions, view) {
+      if (transactionPipeline) {
+        transactionPipeline.dispatchCodeMirrorTransactions(transactions, view);
+      } else {
+        view.update(transactions);
+      }
+    },
     state: EditorState.create({
       doc: config.initialValue ?? "",
       extensions: [
@@ -581,6 +616,17 @@ export function createEditor(config: EditorConfig): EditorAPI {
           }
         }),
         EditorView.updateListener.of((update) => {
+          const markdownTransformRevision = getMarkdownTransformRevision(update.state);
+          if (markdownTransformRevision !== lastMarkdownTransformRevision) {
+            lastMarkdownTransformRevision = markdownTransformRevision;
+            const markdown = update.state.doc.toString();
+            const baseAst = customParser
+              ? parseDocument(customParser, markdown)
+              : transformProcessor
+                ? transformProcessor.runSync(lezerAstFromAnywhere(viewRef, markdown))
+                : lezerAstFromAnywhere(viewRef, markdown);
+            currentAst = applyMarkdownTransformSnapshots(update.state, baseAst);
+          }
           const silent = update.transactions.some((t) => t.annotation(silentDocChange) === true);
           const compositionTransaction = update.transactions.some((t) => t.isUserEvent("input.type.compose"));
           if (update.docChanged || update.selectionSet) {
@@ -716,7 +762,8 @@ export function createEditor(config: EditorConfig): EditorAPI {
           insertColumnAfter: locale.insertColumnAfter,
           insertRowBelow: locale.insertRowBelow,
         }),
-        ...(widgetParser ? createWidgetExtension(widgetParser, widgetDefs) : []),
+        dynamicWidgetDefinitionExtension,
+        ...createWidgetExtension(widgetParser, widgetDefs),
         ...shortcutExtensions,
         ...commandKeymapExtensions,
         ...cmExtensions
@@ -727,6 +774,7 @@ export function createEditor(config: EditorConfig): EditorAPI {
   // Hand the view to lezerAstFromAnywhere consumers so getAst() / emitChange
   // / silent setDocument can read the live incremental Lezer tree.
   viewRef.current = view;
+  lastMarkdownTransformRevision = getMarkdownTransformRevision(view.state);
 
   api = {
     getDocument() {
@@ -739,7 +787,11 @@ export function createEditor(config: EditorConfig): EditorAPI {
       return extractToc(currentAst);
     },
     exportHTML() {
-      return markdownToHtml(view.state.doc.toString(), plugins);
+      return markdownToHtml(
+        view.state.doc.toString(),
+        plugins,
+        (tree) => applyMarkdownTransformSnapshots(view.state, tree),
+      );
     },
     setTheme(theme: NexusTheme) {
       if (destroyed) return;
@@ -838,7 +890,10 @@ export function createEditor(config: EditorConfig): EditorAPI {
       if (silent) {
         const next = view.state.doc.toString();
         if (customParser) {
-          currentAst = parseDocument(customParser, next);
+          currentAst = applyMarkdownTransformSnapshots(
+            view.state,
+            parseDocument(customParser, next),
+          );
         } else {
           currentAst = transformAst(lezerAstFromAnywhere(viewRef, next));
         }
@@ -921,6 +976,21 @@ export function createEditor(config: EditorConfig): EditorAPI {
       const lines = view.state.doc.lines;
       return { characters, words, lines };
     },
+    getContributionSink(): EditorContributionSink {
+      return contributionSink;
+    },
+    dispatchTransaction(transaction: CoreEditorTransaction) {
+      if (destroyed || destroying) {
+        return { status: "rejected", ownerId: "host", reason: "editor-destroyed" };
+      }
+      return transactionPipeline.dispatchTransaction(transaction);
+    },
+    dispatchTransactions(transactions: readonly CoreEditorTransaction[]) {
+      if (destroyed || destroying) {
+        return { status: "rejected", ownerId: "host", reason: "editor-destroyed" };
+      }
+      return transactionPipeline.dispatchTransactions(transactions);
+    },
     destroy() {
       if (destroyed || destroying) return;
       destroying = true;
@@ -929,9 +999,15 @@ export function createEditor(config: EditorConfig): EditorAPI {
       let firstError: unknown;
       let hasError = false;
       try {
+        // The table widget commits its content through EditorView.dispatch().
+        // Keep that one internal transaction alive after `destroying` is set,
+        // while all other public transaction entry points remain closed.
+        flushingTableEditsForDestroy = true;
         const tableEditFlushed = flushPendingTableEdits(view, true);
+        flushingTableEditsForDestroy = false;
         if (tableEditFlushed) flushScheduledChangeNow();
       } catch (error) {
+        flushingTableEditsForDestroy = false;
         firstError = error;
         hasError = true;
       }
@@ -963,6 +1039,8 @@ export function createEditor(config: EditorConfig): EditorAPI {
       pendingDocumentLoad = null;
       composing = false;
       emitter.clear();
+      transactionPipeline.destroy();
+      dynamicContributionSink.destroy();
       try {
         view.destroy();
       } catch (error) {
@@ -974,6 +1052,31 @@ export function createEditor(config: EditorConfig): EditorAPI {
       destroying = false;
       if (hasError) throw firstError;
     }
+  };
+
+  dynamicContributionSink = new DynamicEditorContributionSink({
+    view,
+    editor: api,
+    isComposing: () => composing || view.composing || view.compositionStarted,
+    isDestroyed: () => destroyed || destroying,
+    insertMarkdown: (markdown) => {
+      if (!destroyed) view.dispatch(view.state.replaceSelection(markdown));
+    },
+    uploadAsset: (file) => api.uploadAsset(file),
+  });
+  transactionPipeline = new CoreEditorTransactionPipeline({
+    view,
+    editor: api,
+    isDestroyed: () => destroyed || (destroying && !flushingTableEditsForDestroy),
+  });
+  contributionSink = {
+    registerExtension: dynamicContributionSink.registerExtension.bind(dynamicContributionSink),
+    registerDomEvent: dynamicContributionSink.registerDomEvent.bind(dynamicContributionSink),
+    registerInputTarget: dynamicContributionSink.registerInputTarget.bind(dynamicContributionSink),
+    isInteractionActive: dynamicContributionSink.isInteractionActive.bind(dynamicContributionSink),
+    refresh: dynamicContributionSink.refresh.bind(dynamicContributionSink),
+    registerTransactionFilter: transactionPipeline.registerTransactionFilter.bind(transactionPipeline),
+    registerUpdateListener: transactionPipeline.registerUpdateListener.bind(transactionPipeline),
   };
 
   return api;

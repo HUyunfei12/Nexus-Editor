@@ -104,6 +104,8 @@ test(live-preview): regression tests for click-drift invariants
 | Live-preview / 表格 / wikilinks | **回归用例必加** | 鼠标交互手动走查 |
 | 仅文档/配置 | — | — |
 
+修改插件平台公共 API 或 capability 时，还要同步核对[原生插件 API 指南](./docs/plugins/native-plugin-api.zh.md)、[Obsidian 差异矩阵](./docs/plugins/obsidian-migration.zh.md)和[安全边界示例](./docs/plugins/security-and-events.zh.md)。
+
 ---
 
 ## 4. 代码风格
