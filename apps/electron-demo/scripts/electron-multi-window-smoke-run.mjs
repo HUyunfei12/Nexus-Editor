@@ -63,7 +63,7 @@ if (typeof electronPath !== "string" || !fs.existsSync(electronPath)) {
 }
 
 const args = [mainOutput];
-if (process.platform === "linux" && process.getuid?.() === 0) args.unshift("--no-sandbox");
+if (process.platform === "linux") args.unshift("--no-sandbox");
 let executable = electronPath;
 let executableArgs = args;
 if (process.platform === "linux" && !process.env.DISPLAY) {
