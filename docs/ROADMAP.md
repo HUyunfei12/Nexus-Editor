@@ -40,6 +40,8 @@ This document maps every planned feature to **package ownership / priority / sta
 
 ## 4. Plugin System
 
+Plugin-platform documentation (Chinese): [native API](./plugins/native-plugin-api.zh.md) · [Obsidian migration matrix](./plugins/obsidian-migration.zh.md) · [legacy migration](./plugins/legacy-plugin-migration.zh.md) · [events and security](./plugins/security-and-events.zh.md). The completed design and acceptance record is archived as [`add-plugin-platform-api`](../openspec/changes/archive/2026-08-13-add-plugin-platform-api/).
+
 | # | Feature | Package | Priority | Status | Needs OpenSpec | Notes |
 |---|---|---|---|---|---|---|
 | 9  | Widget API standardization | `core` | P1 | planned | Yes | Existing widgets hit many pitfalls (see CLAUDE.md); spec first |

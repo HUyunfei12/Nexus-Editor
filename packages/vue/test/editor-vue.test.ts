@@ -262,4 +262,56 @@ describe("@floatboat/nexus-vue", () => {
       expect(wrapper.element.querySelector(".cm-line")?.textContent).toBe("uncontrolled");
     });
   });
+
+  it("borrows a runtime across reactive updates without reattaching", async () => {
+    const attachEditor = vi.fn(() => ({ detach: vi.fn() }));
+    const runtime = { attachEditor };
+    const Harness = defineComponent({
+      props: { modelValue: { type: String, required: true } },
+      setup(props) {
+        const { containerRef } = useEditor(() => ({
+          modelValue: props.modelValue,
+          runtime: { kind: "borrowed", runtime },
+        }));
+        return () => h("div", { ref: containerRef });
+      },
+    });
+    const wrapper = mount(Harness, { props: { modelValue: "one" } });
+    await nextTick();
+    expect(attachEditor).toHaveBeenCalledOnce();
+    await wrapper.setProps({ modelValue: "two" });
+    await nextTick();
+    expect(attachEditor).toHaveBeenCalledOnce();
+    expect(wrapper.element.querySelector(".cm-line")?.textContent).toBe("two");
+  });
+
+  it("detaches borrowed runtime without disposing it", async () => {
+    const detach = vi.fn();
+    const runtime = {
+      attachEditor: vi.fn(() => ({ detach })),
+      dispose: vi.fn(),
+    };
+    const wrapper = mount(Editor, {
+      props: { runtime: { kind: "borrowed", runtime } },
+    });
+    await nextTick();
+    wrapper.unmount();
+    expect(detach).toHaveBeenCalledOnce();
+    expect(runtime.dispose).not.toHaveBeenCalled();
+  });
+
+  it("disposes an owned runtime after detach", async () => {
+    const events: string[] = [];
+    const createRuntime = vi.fn(() => ({
+      attachEditor: () => ({ detach: async () => void events.push("detach") }),
+      dispose: async () => void events.push("dispose"),
+    }));
+    const wrapper = mount(Editor, {
+      props: { runtime: { kind: "owned", createRuntime } },
+    });
+    await nextTick();
+    wrapper.unmount();
+    await vi.waitFor(() => expect(events).toEqual(["detach", "dispose"]));
+    expect(createRuntime).toHaveBeenCalledOnce();
+  });
 });

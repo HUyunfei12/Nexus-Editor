@@ -25,7 +25,7 @@ describe("open handler logic", () => {
     });
 
     const state = createState();
-    const result = await window.nexusDemo.openFile();
+    const result = await window.nexusDemo!.openFile();
 
     if (result) {
       state.filePath = result.path;
@@ -46,7 +46,7 @@ describe("open handler logic", () => {
     state.content = "existing";
     state.dirty = true;
 
-    const result = await window.nexusDemo.openFile();
+    const result = await window.nexusDemo!.openFile();
     if (result) {
       state.filePath = result.path;
     }
@@ -71,7 +71,7 @@ describe("save handler logic", () => {
     state.content = "updated";
     state.dirty = true;
 
-    await window.nexusDemo.saveFile(state.filePath, state.content);
+    await window.nexusDemo!.saveFile(state.filePath, state.content);
     state.dirty = false;
 
     expect(state.dirty).toBe(false);
@@ -85,7 +85,7 @@ describe("save handler logic", () => {
     state.content = "new content";
     state.dirty = true;
 
-    const result = await window.nexusDemo.saveFileAs(state.content);
+    const result = await window.nexusDemo!.saveFileAs(state.content);
     if (result) {
       state.filePath = result.path;
       state.dirty = false;
@@ -102,7 +102,7 @@ describe("save handler logic", () => {
     state.content = "content";
     state.dirty = true;
 
-    const result = await window.nexusDemo.saveFileAs(state.content);
+    const result = await window.nexusDemo!.saveFileAs(state.content);
     if (!result) {
       // no-op on cancel
     }

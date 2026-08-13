@@ -6,6 +6,10 @@ import type { Code, FootnoteDefinition, FootnoteReference, Heading, Html, List, 
 import type { CodeHighlightToken } from "./types";
 import { lezerStringToMdast, lezerTreeToMdast } from "./lezer-mdast-adapter";
 import { highlightCodeBlock } from "./live-preview-highlight";
+import {
+  applyMarkdownTransformSnapshots,
+  getMarkdownTransformRevision,
+} from "./markdown-contributions";
 
 import { createLivePreviewDiagnostics } from "./live-preview-diag";
 import { collectLivePreviewRanges, selectionIntersects, selectionOnSameLine } from "./live-preview-ranges";
@@ -1052,7 +1056,7 @@ function buildDecorations(
   // EditorState. No worker round-trip, no async cache invalidation. Reuse
   // a pre-computed ast when the caller already walked the tree this turn
   // (cursor-only updates pass the previous build's ast through ctx).
-  const ast = ctx.ast ?? parseFromState(state);
+  const ast = ctx.ast ?? applyMarkdownTransformSnapshots(state, parseFromState(state));
   const t1 = perfEnabled ? performance.now() : 0;
   // Highlight tokens are computed ON DEMAND but cached: identical (lang, code)
   // pairs hit the LRU in highlightCodeBlock so cursor moves don't re-tokenize.
@@ -1316,11 +1320,13 @@ export function createLivePreviewExtension(
   // walk and the hljs run when the source hasn't changed. Edits replace the
   // cache via the docChanged branch below.
   let lastBuilt: { doc: string; ast: Root; codeTokens: CodeHighlightToken[] } | null = null;
+  let lastTransformRevision = "";
   let compositionActive = false;
   const rebuildForCompositionStart = StateEffect.define<null>();
   const rebuildAfterComposition = StateEffect.define<null>();
 
   function build(state: EditorState, selection: readonly SelectionRange[], reuseCache: boolean): DecorationSet {
+    lastTransformRevision = getMarkdownTransformRevision(state);
     const docStr = state.doc.toString();
     const ctx: BuildContext = reuseCache && lastBuilt && lastBuilt.doc === docStr
       ? { ast: lastBuilt.ast, codeTokens: lastBuilt.codeTokens }
@@ -1357,6 +1363,9 @@ export function createLivePreviewExtension(
       }
       if (tr.effects.some((effect) => effect.is(rebuildAfterComposition))) {
         compositionActive = false;
+        return build(tr.state, tr.state.selection.ranges, false);
+      }
+      if (getMarkdownTransformRevision(tr.state) !== lastTransformRevision) {
         return build(tr.state, tr.state.selection.ranges, false);
       }
       if (tr.isUserEvent("input.type.compose")) {

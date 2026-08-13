@@ -10,7 +10,7 @@ function buildCreateConfig(
   config: UseEditorConfig,
   onDocChange: (doc: string, ast: Root) => void
 ) {
-  const { value, initialValue, onChange, onReady, ...rest } = config;
+  const { value, initialValue, onChange, onReady, runtime: _runtime, ...rest } = config;
 
   return {
     container,
@@ -45,6 +45,12 @@ export function useEditor(config: UseEditorConfig): UseEditorResult {
 
     const { onReady } = configRef.current;
     const instance = createEditor(buildCreateConfig(container, configRef.current, onDocChange));
+    const ownership = configRef.current.runtime;
+    const ownedRuntime = ownership?.kind === "owned"
+      ? ownership.createRuntime()
+      : null;
+    const runtime = ownedRuntime ?? (ownership?.kind === "borrowed" ? ownership.runtime : undefined);
+    const attachment = runtime?.attachEditor(instance, container);
 
     lastSyncedDocRef.current = resolveInitialDocument(
       configRef.current.value,
@@ -56,7 +62,19 @@ export function useEditor(config: UseEditorConfig): UseEditorResult {
     onReady?.(instance);
 
     return () => {
+      let detached: void | Promise<void>;
+      try {
+        detached = attachment?.detach();
+      } catch {
+        detached = undefined;
+      }
       instance.destroy();
+      if (ownedRuntime) {
+        void Promise.resolve(detached).then(
+          () => ownedRuntime.dispose(),
+          () => ownedRuntime.dispose()
+        );
+      }
       editorRef.current = null;
       setEditor(null);
       lastSyncedDocRef.current = null;

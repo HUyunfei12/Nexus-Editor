@@ -1,6 +1,6 @@
 {
   "name": "@floatboat/nexus-plugin-wordcount",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "Markdown-aware word, character, CJK, and reading-time statistics for Nexus-Editor.",
   "type": "module",
   "main": "./dist/index.js",
@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@floatboat/nexus-core": "workspace:*",
+    "@floatboat/nexus-plugin-api": "workspace:*",
     "remark-frontmatter": "^5.0.0",
     "remark-gfm": "^4.0.0",
     "remark-math": "^6.0.0",

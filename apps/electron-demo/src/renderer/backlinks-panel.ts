@@ -1,9 +1,13 @@
-import type { LinkIndex, BacklinkHit } from "./link-index";
+import type { BacklinkHit, LinkIndexReader } from "./link-index";
 
 export interface BacklinksPanelOptions {
-  index: LinkIndex;
+  index: LinkIndexReader;
   onOpenFile(filePath: string): void;
   getActiveFile(): string | null;
+  /** Maps the application's file path into the index namespace. */
+  toIndexPath?(filePath: string): string | null;
+  /** Maps an index hit back into the application's file path namespace. */
+  fromIndexPath?(filePath: string): string | null;
 }
 
 export interface BacklinksPanel {
@@ -126,7 +130,13 @@ const BADGE_STYLES = `
 `;
 
 export function createBacklinksPanel(options: BacklinksPanelOptions): BacklinksPanel {
-  const { index, onOpenFile, getActiveFile } = options;
+  const {
+    index,
+    onOpenFile,
+    getActiveFile,
+    toIndexPath = (path) => path,
+    fromIndexPath = (path) => path,
+  } = options;
 
   const root = document.createElement("aside");
   root.className = "backlinks-panel";
@@ -169,7 +179,10 @@ export function createBacklinksPanel(options: BacklinksPanelOptions): BacklinksP
     btn.addEventListener("mouseleave", () => {
       btn.style.background = "transparent";
     });
-    btn.addEventListener("click", () => onOpenFile(hit.sourcePath));
+    btn.addEventListener("click", () => {
+      const path = fromIndexPath(hit.sourcePath);
+      if (path) onOpenFile(path);
+    });
 
     const title = document.createElement("div");
     title.style.cssText = ITEM_TITLE_STYLES;
@@ -202,8 +215,9 @@ export function createBacklinksPanel(options: BacklinksPanelOptions): BacklinksP
       pendingUnlinkedCancel = null;
     }
     list.textContent = "";
-    const active = getActiveFile();
-    if (!active) {
+    const activeFile = getActiveFile();
+    const active = activeFile ? toIndexPath(activeFile) : null;
+    if (!activeFile || !active) {
       header.textContent = "Backlinks";
       renderEmpty("No active file", list);
       return;
@@ -231,7 +245,7 @@ export function createBacklinksPanel(options: BacklinksPanelOptions): BacklinksP
     pendingUnlinkedCancel = scheduleLowPriority(() => {
       pendingUnlinkedCancel = null;
       // Bail if the active file changed while we were waiting.
-      if (destroyed || getActiveFile() !== active) return;
+      if (destroyed || getActiveFile() !== activeFile) return;
       const t0 = performance.now();
       const unlinked = index.getUnlinkedMentions(active);
       const t1 = performance.now();

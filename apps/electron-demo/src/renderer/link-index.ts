@@ -1,4 +1,16 @@
 import { scanWikiLinks, type WikiLinkMatch } from "@floatboat/nexus-core";
+import type {
+  ComponentId,
+  ManagedResource,
+  NexusFile,
+  PluginId,
+  ResourceOwner,
+  VaultPath,
+} from "@floatboat/nexus-plugin-api";
+import {
+  MemoryMetadataRuntime,
+  MemoryVaultRuntime,
+} from "@floatboat/nexus-plugin-runtime";
 import { normalizeSlashes, joinPath } from "./path-utils";
 
 /** Prefer requestIdleCallback for yielding; fall back to a macrotask otherwise. */
@@ -24,6 +36,15 @@ export interface BacklinkHit {
 }
 
 export type LinkIndexListener = () => void;
+
+/** Read-only surface shared by the legacy index and the runtime metadata mirror. */
+export interface LinkIndexReader {
+  resolve(name: string, fromPath: string | null | undefined): string | null;
+  getAllNoteNames(): string[];
+  getBacklinks(targetPath: string): readonly BacklinkHit[];
+  getUnlinkedMentions(targetPath: string): readonly BacklinkHit[];
+  subscribe(listener: LinkIndexListener): () => void;
+}
 
 interface IndexSnapshot {
   forward: Map<string, WikiLinkMatch[]>;
@@ -536,6 +557,182 @@ export class LinkIndex {
         to: m.to,
         snippet: snippetAround(content, m.from, m.to),
       });
+    }
+  }
+}
+
+/**
+ * Renderer projection over the runtime's Vault + Metadata capability mirror.
+ *
+ * This class deliberately keeps no second link graph. Every query reads the
+ * currently-bound MemoryMetadataRuntime, while snippets and unlinked mentions
+ * read the same MemoryVaultRuntime snapshots. Paths are Vault-relative.
+ */
+export class MetadataLinkIndex implements LinkIndexReader {
+  private vault: MemoryVaultRuntime;
+  private metadata: MemoryMetadataRuntime;
+  private disposeMetadataSubscription: () => void;
+  private readonly listeners = new Set<LinkIndexListener>();
+  private disposed = false;
+
+  constructor(vault: MemoryVaultRuntime, metadata: MemoryMetadataRuntime) {
+    this.vault = vault;
+    this.metadata = metadata;
+    this.disposeMetadataSubscription = this.observe(metadata);
+  }
+
+  replaceMirror(vault: MemoryVaultRuntime, metadata: MemoryMetadataRuntime): void {
+    if (this.disposed) throw new Error("Metadata link index is disposed");
+    this.disposeMetadataSubscription();
+    this.vault = vault;
+    this.metadata = metadata;
+    this.disposeMetadataSubscription = this.observe(metadata);
+    this.notify();
+  }
+
+  resolve(name: string, fromPath: string | null | undefined): string | null {
+    const sourcePath = fromPath ? this.normalizePath(fromPath) : null;
+    if (fromPath && sourcePath === null) return null;
+    return this.metadata.resolveLink(
+      name,
+      sourcePath ?? undefined,
+    )?.path ?? null;
+  }
+
+  getAllNoteNames(): string[] {
+    return this.vault.listFiles()
+      .filter((file) => file.extension.toLocaleLowerCase() === "md")
+      .map((file) => file.basename)
+      .filter((name, index, names) => names.indexOf(name) === index)
+      .sort((left, right) => left.localeCompare(right));
+  }
+
+  getBacklinks(targetPath: string): readonly BacklinkHit[] {
+    const target = this.fileAt(targetPath);
+    if (!target) return [];
+    const linkedSources = new Map(
+      this.metadata.getBacklinks(target).map((link) => [link.source.id, link.source]),
+    );
+    const hits: BacklinkHit[] = [];
+    for (const source of linkedSources.values()) {
+      const cache = this.metadata.getFileCache(source);
+      if (!cache) continue;
+      const content = this.readText(source);
+      const candidates = [...cache.links, ...cache.embeds]
+        .sort((left, right) => left.position.start.offset - right.position.start.offset);
+      for (const candidate of candidates) {
+        if (this.metadata.resolveLink(candidate.link, source.path)?.id !== target.id) continue;
+        const from = candidate.position.start.offset;
+        const to = candidate.position.end.offset;
+        hits.push({
+          sourcePath: source.path,
+          target: candidate.link,
+          from,
+          to,
+          snippet: snippetAround(content, from, to),
+        });
+      }
+    }
+    return hits;
+  }
+
+  getUnlinkedMentions(targetPath: string): readonly BacklinkHit[] {
+    const target = this.fileAt(targetPath);
+    if (!target) return [];
+    const needle = target.basename;
+    if (!needle) return [];
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`\\b${escaped}\\b`, "gi");
+    const hits: BacklinkHit[] = [];
+    for (const source of this.vault.listFiles()) {
+      if (source.id === target.id || source.extension.toLocaleLowerCase() !== "md") continue;
+      const content = this.readText(source);
+      const cache = this.metadata.getFileCache(source);
+      const linkedRanges = cache
+        ? [...cache.links, ...cache.embeds].map((link) => ({
+            from: link.position.start.offset,
+            to: link.position.end.offset,
+          }))
+        : [];
+      pattern.lastIndex = 0;
+      for (let match = pattern.exec(content); match; match = pattern.exec(content)) {
+        const from = match.index;
+        const to = from + match[0].length;
+        if (linkedRanges.some((range) => from >= range.from && to <= range.to)) continue;
+        hits.push({
+          sourcePath: source.path,
+          target: needle,
+          from,
+          to,
+          snippet: snippetAround(content, from, to),
+        });
+      }
+    }
+    return hits;
+  }
+
+  subscribe(listener: LinkIndexListener): () => void {
+    if (this.disposed) return () => undefined;
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.disposeMetadataSubscription();
+    this.listeners.clear();
+  }
+
+  private observe(metadata: MemoryMetadataRuntime): () => void {
+    const resources: ManagedResource[] = [];
+    const owner: ResourceOwner = Object.freeze({
+      pluginId: "nexus-electron-renderer" as PluginId,
+      componentId: "nexus-electron-renderer:metadata-index" as ComponentId,
+    });
+    const service = metadata.createService(owner, (resource) => resources.push(resource));
+    service.events.on("resolved", () => {
+      // Run after every synchronous `resolved` observer so renderer refreshes
+      // see the completed graph and cannot overtake public metadata events.
+      queueMicrotask(() => {
+        if (!this.disposed && this.metadata === metadata) this.notify();
+      });
+    });
+    for (const resource of resources) {
+      const activation = resource.activate?.();
+      if (activation && typeof activation.then === "function") {
+        throw new Error("Metadata event subscription activation must be synchronous");
+      }
+    }
+    return () => {
+      for (const resource of resources.reverse()) void resource.dispose();
+    };
+  }
+
+  private notify(): void {
+    for (const listener of [...this.listeners]) {
+      try { listener(); } catch { /* isolate renderer observers */ }
+    }
+  }
+
+  private fileAt(path: string): NexusFile | null {
+    const normalized = this.normalizePath(path);
+    return normalized === null ? null : this.vault.getFileByPath(normalized);
+  }
+
+  private normalizePath(path: string): VaultPath | null {
+    const normalized = normalizeSlashes(path).replace(/^\/+/, "");
+    if (!normalized || normalized.split("/").some((part) => !part || part === "." || part === "..")) {
+      return null;
+    }
+    return normalized as VaultPath;
+  }
+
+  private readText(file: NexusFile): string {
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(this.vault.readBytesSnapshot(file));
+    } catch {
+      return "";
     }
   }
 }

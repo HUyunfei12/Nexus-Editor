@@ -36,6 +36,14 @@ export default defineConfig({
         __dirname,
         "../../packages/core/src/index.ts"
       ),
+      "@floatboat/nexus-plugin-api": path.resolve(
+        __dirname,
+        "../../packages/plugin-api/src/index.ts"
+      ),
+      "@floatboat/nexus-plugin-runtime": path.resolve(
+        __dirname,
+        "../../packages/plugin-runtime/src/index.ts"
+      ),
       "@floatboat/nexus-preset-gfm": path.resolve(
         __dirname,
         "../../packages/preset-gfm/src/index.ts"
@@ -59,6 +67,10 @@ export default defineConfig({
       "@floatboat/nexus-plugin-wordcount": path.resolve(
         __dirname,
         "../../packages/plugin-wordcount/src/index.ts"
+      ),
+      "@floatboat/nexus-reference-plugins": path.resolve(
+        __dirname,
+        "../../packages/reference-plugins/src/index.ts"
       ),
     },
   },

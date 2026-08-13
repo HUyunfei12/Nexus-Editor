@@ -2,6 +2,7 @@ import { EditorView, WidgetType, runScopeHandlers } from "@codemirror/view";
 import type { Table } from "mdast";
 
 import type { LivePreviewLabels } from "./types";
+import { setInputTargetProvider } from "./input-target-provider";
 
 const tableEditingCounts = new WeakMap<EditorView, number>();
 
@@ -706,6 +707,7 @@ export class EditableTableWidget extends WidgetType {
     let selectionChangeDocument: Document | null = null;
     let registeredSessionView: EditorView | null = null;
     let sessionClosed = false;
+    let removeInputTargetProvider: (() => void) | null = null;
 
     const tableEditSession: TableEditSession = {
       flush: () => syncDirtyRowsToDocument(),
@@ -772,6 +774,8 @@ export class EditableTableWidget extends WidgetType {
         selectionChangeDocument.removeEventListener("selectionchange", onDocumentSelectionChange);
         selectionChangeDocument = null;
       }
+      removeInputTargetProvider?.();
+      removeInputTargetProvider = null;
     };
 
     function rememberDirtyRow(lineIdx: number | undefined, row: HTMLElement): void {
@@ -1337,6 +1341,59 @@ export class EditableTableWidget extends WidgetType {
       if (selectedCol >= 0) return { r1: 0, c1: selectedCol, r2: rows.length - 1, c2: selectedCol };
       if (selectedRow >= 0) return { r1: selectedRow, c1: 0, r2: selectedRow, c2: colCount - 1 };
       return null;
+    }
+
+    function nativeSelectionCell(): HTMLElement | null {
+      const selection = wrapper.ownerDocument.getSelection();
+      const anchor = selection?.anchorNode;
+      const element = anchor instanceof HTMLElement ? anchor : anchor?.parentElement;
+      return element?.closest<HTMLElement>(".nexus-cell") ?? null;
+    }
+
+    function replaceNativeCellSelection(cell: HTMLElement, text: string): boolean {
+      const selection = wrapper.ownerDocument.getSelection();
+      if (!selection || selection.rangeCount === 0) return false;
+      const range = selection.getRangeAt(0);
+      if (!cell.contains(range.commonAncestorContainer)) return false;
+      range.deleteContents();
+      const textNode = wrapper.ownerDocument.createTextNode(text);
+      range.insertNode(textNode);
+      range.setStartAfter(textNode);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      cell.dataset.source = cell.textContent ?? "";
+      const row = cell.closest<HTMLElement>("tr");
+      const lineIdx = row?.dataset.sourceLineIdx;
+      if (row && lineIdx !== undefined) rememberDirtyRow(Number(lineIdx), row);
+      syncDirtyRowsToDocument();
+      return true;
+    }
+
+    function replaceSelectedTableRange(text: string): boolean {
+      const range = selectedCopyRange();
+      if (!range) return false;
+      const inputRows = text.replace(/\r\n?/g, "\n").split("\n").map((line) => line.split("\t"));
+      const lines = self.source.split("\n");
+      const dataLines: number[] = [];
+      for (let index = 0; index < lines.length; index++) {
+        if (!SEPARATOR_RE.test(lines[index])) dataLines.push(index);
+      }
+      for (let row = range.r1; row <= range.r2; row++) {
+        const lineIndex = dataLines[row];
+        if (lineIndex === undefined) continue;
+        const cells = lines[lineIndex].split("|").slice(1, -1);
+        for (let col = range.c1; col <= range.c2; col++) {
+          if (col >= cells.length) continue;
+          const sourceRow = inputRows[Math.min(row - range.r1, inputRows.length - 1)] ?? [""];
+          const value = sourceRow[Math.min(col - range.c1, sourceRow.length - 1)] ?? "";
+          cells[col] = ` ${value} `;
+        }
+        lines[lineIndex] = `|${cells.join("|")}|`;
+      }
+      self.dispatch(lines.join("\n"));
+      clearRangeSelection();
+      return true;
     }
 
     function renderRangeSelection(): void {
@@ -2357,6 +2414,30 @@ export class EditableTableWidget extends WidgetType {
       if (!text) return;
       e.clipboardData?.setData("text/plain", text);
       e.preventDefault();
+    });
+    removeInputTargetProvider = setInputTargetProvider(wrapper, {
+      resolveInputTarget(eventTarget) {
+        if (!wrapper.contains(eventTarget)) return null;
+        return {
+          kind: "table",
+          id: `table:${self.tableFrom}`,
+          element: wrapper,
+          getSelectedText() {
+            const range = selectedCopyRange();
+            if (range) return serializeRangeSelection(range);
+            const cell = nativeSelectionCell();
+            const selection = wrapper.ownerDocument.getSelection();
+            return cell && selection && cell.contains(selection.anchorNode)
+              ? selection.toString()
+              : "";
+          },
+          replaceSelection(text) {
+            if (selectedCopyRange()) return replaceSelectedTableRange(text);
+            const cell = nativeSelectionCell();
+            return cell ? replaceNativeCellSelection(cell, text) : false;
+          },
+        };
+      },
     });
     wrapper.tabIndex = -1;
     wrapper.style.outline = "none";

@@ -30,6 +30,38 @@ body,
   cursor: pointer;
 }
 
+.plugin-slot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plugin-slot:empty {
+  display: none;
+}
+
+.plugin-slot--ribbon,
+.plugin-slot--view-toolbar {
+  flex-shrink: 0;
+}
+
+.plugin-slot--editor-toolbar {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--nexus-border, #ddd);
+  background: var(--nexus-bg-subtle, #f6f8fa);
+}
+
+.plugin-slot button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--nexus-border, #d0d7de);
+  border-radius: 4px;
+  background: var(--nexus-bg, #fff);
+  color: var(--nexus-text, #24292e);
+  cursor: pointer;
+}
+
 .main-area {
   flex: 1;
   display: flex;
@@ -70,6 +102,127 @@ body,
   background: #fafafa;
   border-top: 1px solid #eee;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.status-line__document {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nexus-workspace-leaf[data-nexus-product-surface] {
+  display: flex;
+  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.nexus-workspace-leaf[data-nexus-product-surface] > aside,
+.nexus-workspace-leaf[data-nexus-product-surface] > .nexus-outline-panel {
+  height: 100%;
+}
+
+.nexus-plugin-menu {
+  z-index: 10000;
+  min-width: 160px;
+  padding: 4px 0;
+  border: 1px solid var(--nexus-border, #ddd);
+  border-radius: 4px;
+  background: var(--nexus-bg, #fff);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.nexus-plugin-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nexus-plugin-menu button:hover,
+.nexus-plugin-menu button:focus-visible {
+  background: var(--nexus-bg-muted, #f0f0f0);
+}
+
+.nexus-plugin-menu button[data-dangerous="true"] {
+  color: #d73a49;
+}
+
+.nexus-runtime-settings-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.nexus-runtime-settings-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: 80vh;
+  overflow-y: auto;
+  border: 1px solid var(--nexus-border, #eee);
+  border-radius: 8px;
+  background: var(--nexus-bg, #fff);
+  color: var(--nexus-text, #24292e);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.nexus-runtime-settings-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--nexus-border, #eee);
+}
+
+.nexus-runtime-settings-dialog > header h2 {
+  font-size: 16px;
+}
+
+.nexus-runtime-settings-dialog > header button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.nexus-runtime-settings-content {
+  padding: 8px 24px 16px;
+}
+
+.nexus-plugin-setting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--nexus-border-subtle, #f0f0f0);
+}
+
+.nexus-plugin-setting > p {
+  grid-column: 1;
+  color: var(--nexus-text-muted, #888);
+  font-size: 12px;
+}
+
+.nexus-plugin-setting > input,
+.nexus-plugin-setting > select,
+.nexus-plugin-setting > button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
 }
 
 /* Syntax highlighting for fenced code blocks.

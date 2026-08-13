@@ -46,3 +46,9 @@ export {
   type SlashCommandHistoryOptions,
   type SlashCommandHistoryStorage,
 } from "./menu-ui";
+
+export {
+  SlashLifecyclePlugin,
+  slashLifecyclePluginManifest,
+  type SlashLifecyclePluginOptions,
+} from "./runtime-plugin";

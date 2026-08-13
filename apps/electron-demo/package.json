@@ -13,6 +13,7 @@
     "build": "tsup electron/main.ts electron/preload.ts --outDir dist-electron --format cjs --platform node --external electron --clean && vite build",
     "start": "electron dist-electron/main.js",
     "test": "vitest run --config ../../vitest.config.ts",
+    "smoke:multi-window": "node scripts/electron-multi-window-smoke-run.mjs",
     "dist": "pnpm run build && electron-builder",
     "dist:mac": "pnpm run build && electron-builder --mac",
     "dist:mac-arm64": "pnpm run build && electron-builder --mac --arm64",
@@ -23,11 +24,14 @@
   },
   "dependencies": {
     "@floatboat/nexus-core": "workspace:*",
+    "@floatboat/nexus-plugin-api": "workspace:*",
     "@floatboat/nexus-plugin-history": "workspace:*",
+    "@floatboat/nexus-plugin-runtime": "workspace:*",
     "@floatboat/nexus-plugin-search": "workspace:*",
     "@floatboat/nexus-plugin-slash": "workspace:*",
     "@floatboat/nexus-plugin-toolbar": "workspace:*",
     "@floatboat/nexus-plugin-wordcount": "workspace:*",
+    "@floatboat/nexus-reference-plugins": "workspace:*",
     "@floatboat/nexus-preset-gfm": "workspace:*",
     "highlight.js": "^11.11.0"
   },

@@ -120,8 +120,9 @@ const CLOSE_BTN_STYLES = `
   display: flex; align-items: center; justify-content: center;
 `;
 
-interface SettingsPanelResult {
+export interface SettingsPanelResult {
   element: HTMLElement;
+  setCloseObserver(observer: () => void): void;
   destroy(): void;
 }
 
@@ -243,6 +244,8 @@ function sectionTitle(text: string): HTMLElement {
 
 export function createSettingsPanel(settings: EditorSettings, onChange: OnChange): SettingsPanelResult {
   const backdrop = document.createElement("div");
+  backdrop.className = "nexus-settings-panel";
+  backdrop.tabIndex = -1;
   backdrop.style.cssText = PANEL_STYLES;
 
   const dialog = document.createElement("div");
@@ -288,20 +291,29 @@ export function createSettingsPanel(settings: EditorSettings, onChange: OnChange
   dialog.append(header, body);
   backdrop.appendChild(dialog);
 
-  const close = () => backdrop.remove();
-  closeBtn.addEventListener("click", close);
-  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  let destroyed = false;
+  let closeObserver: (() => void) | undefined;
+  const destroy = () => {
+    if (destroyed) return;
+    destroyed = true;
+    document.removeEventListener("keydown", handleEsc);
+    backdrop.remove();
+    closeObserver?.();
+    closeObserver = undefined;
+  };
+  closeBtn.addEventListener("click", destroy);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) destroy(); });
 
-  const handleEsc = (e: KeyboardEvent) => { if (e.key === "Escape") { close(); document.removeEventListener("keydown", handleEsc); } };
+  const handleEsc = (e: KeyboardEvent) => { if (e.key === "Escape") destroy(); };
   document.addEventListener("keydown", handleEsc);
 
   document.body.appendChild(backdrop);
 
   return {
     element: backdrop,
-    destroy() {
-      document.removeEventListener("keydown", handleEsc);
-      close();
+    setCloseObserver(observer) {
+      closeObserver = observer;
     },
+    destroy,
   };
 }

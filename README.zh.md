@@ -199,6 +199,8 @@ pnpm dev:electron-demo
 
 ## 📖 API 参考
 
+插件平台文档：[原生插件 API](./docs/plugins/native-plugin-api.zh.md) · [Obsidian 迁移差异](./docs/plugins/obsidian-migration.zh.md) · [legacy 渐进迁移](./docs/plugins/legacy-plugin-migration.zh.md) · [事件与安全边界](./docs/plugins/security-and-events.zh.md)
+
 <details>
 <summary><b>编辑器 API</b> —— 方法与事件</summary>
 
