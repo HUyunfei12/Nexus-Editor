@@ -1,0 +1,38 @@
+{
+  "name": "@floatboat/nexus-preset-bundle",
+  "version": "0.0.14",
+  "description": "Composable preset collections for Nexus Editor (GFM + common plugins).",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --platform browser --dts --clean"
+  },
+  "dependencies": {
+    "@floatboat/nexus-core": "workspace:*",
+    "@floatboat/nexus-preset-gfm": "workspace:*",
+    "@floatboat/nexus-plugin-history": "workspace:*",
+    "@floatboat/nexus-plugin-search": "workspace:*",
+    "@floatboat/nexus-plugin-slash": "workspace:*",
+    "@floatboat/nexus-plugin-toolbar": "workspace:*",
+    "@floatboat/nexus-plugin-math": "workspace:*",
+    "@floatboat/nexus-plugin-vim": "workspace:*",
+    "@floatboat/nexus-plugin-wordcount": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

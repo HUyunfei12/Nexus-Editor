@@ -1,0 +1,6 @@
+{
+  "packages/core/dist/index.js": 400000,
+  "packages/react/dist/index.js": 50000,
+  "packages/vue/dist/index.js": 50000,
+  "packages/preset-gfm/dist/index.js": 20000
+}

@@ -19,6 +19,12 @@ pnpm-debug.log*
 .env.*
 !.env.example
 
+# Test artifacts
+coverage/
+test-results/
+playwright-report/
+blob-report/
+
 # OS / editor files
 .DS_Store
 Thumbs.db

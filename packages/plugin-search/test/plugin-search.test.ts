@@ -3,7 +3,9 @@ import { createEditor } from "@floatboat/nexus-core";
 import { createGfmPreset } from "../../preset-gfm/src/index";
 import {
   createSearchPlugin,
+  findFuzzyMatches,
   findSearchMatches,
+  fuzzyScore,
   replaceAllMatches
 } from "../src/index";
 
@@ -301,6 +303,62 @@ describe("@floatboat/nexus-plugin-search", () => {
     expect(findSearchMatches("cat cats concatenate", "cat|dog", { regexp: true, wholeWord: true })).toEqual([
       { from: 0, to: 3, text: "cat" }
     ]);
+  });
+
+  describe("fuzzy matching", () => {
+    it("returns matches in document order, spanning skipped characters", () => {
+      expect(findFuzzyMatches("aXbYc aXbYc", "abc")).toEqual([
+        { from: 0, to: 5, text: "aXbYc" },
+        { from: 6, to: 11, text: "aXbYc" }
+      ]);
+    });
+
+    it("requires an in-order subsequence", () => {
+      expect(findFuzzyMatches("abc", "cba")).toEqual([]);
+    });
+
+    it("honors case sensitivity", () => {
+      expect(findFuzzyMatches("process Processor", "pr", { caseSensitive: true })).toEqual([
+        { from: 0, to: 2, text: "pr" }
+      ]);
+    });
+
+    it("returns no matches for empty or whitespace queries", () => {
+      expect(findFuzzyMatches("anything", "")).toEqual([]);
+      expect(findFuzzyMatches("anything", "   ")).toEqual([]);
+    });
+
+    it("returns no matches for an empty document", () => {
+      expect(findFuzzyMatches("", "q")).toEqual([]);
+    });
+
+    it("reports a non-match score for impossible queries", () => {
+      expect(fuzzyScore("xyz", "transition")).toBe(Number.NEGATIVE_INFINITY);
+    });
+
+    it("scores consecutive characters higher than spread characters", () => {
+      const consecutive = fuzzyScore("prc", "process");
+      const spread = fuzzyScore("pcs", "process");
+      expect(consecutive).toBeGreaterThan(spread);
+      expect(consecutive).not.toBe(Number.NEGATIVE_INFINITY);
+      expect(spread).not.toBe(Number.NEGATIVE_INFINITY);
+    });
+
+    it("round-trips a query as a perfect match", () => {
+      expect(fuzzyScore("process", "process")).toBeGreaterThan(
+        fuzzyScore("prc", "process")
+      );
+    });
+
+    it("scores correctly on documents longer than the memo-key stride", () => {
+      const filler = "x".repeat(12000);
+      const text = `${filler}process${filler}processor`;
+      const viaGapRecomputed = fuzzyScore("process", text);
+      expect(viaGapRecomputed).not.toBe(Number.NEGATIVE_INFINITY);
+      const matches = findFuzzyMatches(text, "process");
+      expect(matches.length).toBeGreaterThanOrEqual(1);
+      expect(matches[0].text).toBe("process");
+    });
   });
 
   it("creates a search plugin descriptor", () => {

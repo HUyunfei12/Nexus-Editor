@@ -25,7 +25,7 @@ This document maps every planned feature to **package ownership / priority / sta
 | 2  | Whole-word matching | `plugin-search` | P1 | done | No | `wholeWord` option via `buildSearchPattern` with `\b` boundaries |
 | 15 | Regex search | `plugin-search` | P1 | done | No | `regexp` option landed alongside whole-word; invalid-regex guarded |
 | 16 | Command / search history | `plugin-search` + `plugin-slash` | P2 | done | Yes | Host-injected storage (no implicit localStorage) — `add-search-query-history` + `add-slash-recent-command-history` |
-| 17 | Fuzzy search | `plugin-search` | P2 | planned | No | Evaluate fzf-like algorithm vs. third-party lib; needs backtracking matcher |
+| 17 | Fuzzy search | `plugin-search` | P2 | done | No | `findFuzzyMatches` + `fuzzyScore` — fzf-like subsequence matcher with consecutive / CamelCase rewards (`openspec/changes/add-fuzzy-search`) |
 | 3  | Slash command sorting + limit | `plugin-slash` | P0 | done | Yes | Landed alongside the floating menu UI — see `openspec/changes/add-slash-menu-ui` |
 | 27 | Slash command floating menu UI | `plugin-slash` + `electron-demo` | P0 | done | Yes | `createSlashMenuUI(editor, options)` — see `openspec/changes/add-slash-menu-ui` |
 
@@ -75,8 +75,10 @@ Plugin-platform documentation (Chinese): [native API](./plugins/native-plugin-ap
 | # | Feature | Package | Priority | Status | Needs OpenSpec | Notes |
 |---|---|---|---|---|---|---|
 | 21 | Electron packaging optimization | `apps/electron-demo` | P1 | planned | No | Size, startup time, autoUpdater |
-| 22 | Web Component / iframe wrapper | new `wc` package | P2 | planned | Yes | Share core instance with React/Vue SDK |
+| 22 | Web Component / iframe wrapper | `wc` | P2 | done | Yes | `<nexus-editor>` custom element: `value` attribute, `change`/`ready` events, `getEditor()` (`openspec/changes/add-ecosystem-packages`) |
 | 23 | Cloud storage interface | `core` storage adapter layer | P2 | planned | Yes | NoteVault interface with pluggable backends |
+| 24 | Aggregated default preset | `preset-bundle` | P2 | done | Yes | `createDefaultPreset()` builds a curated ordered plugin stack (`openspec/changes/add-ecosystem-packages`) |
+| 25 | MDX support | `core` + analysis | P3 | research | Yes | Feasibility evaluated in `docs/mdx-support-analysis.md`; decide via design doc before implementation |
 
 ## 9. Developer Experience
 

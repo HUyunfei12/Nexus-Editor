@@ -59,11 +59,49 @@ jobs:
       - name: Build packages
         run: pnpm build
 
+      - name: Check bundle-size budget
+        if: always()
+        run: node scripts/check-size.mjs
+
       - name: Build Electron demo
         run: pnpm build:electron-demo
 
       - name: Smoke test Electron multi-window runtime
         run: pnpm --filter @floatboat/nexus-electron-demo smoke:multi-window
+
+  browser-e2e:
+    name: Browser E2E & Benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm e2e:install
+
+      - name: Build packages (E2E harness imports source, build for bench dist)
+        run: pnpm build
+
+      - name: Run Playwright E2E
+        run: pnpm e2e:test
+
+      - name: Check performance budget
+        if: always()
+        run: node scripts/bench.mjs --budget scripts/bench-budgets.json
 
   publish:
     name: Publish Packages

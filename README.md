@@ -165,14 +165,18 @@ A real Electron app with file IO, live preview, and every plugin enabled — the
 ## 📦 Packages
 
 <details>
-<summary><b>Full package list (11 packages)</b> — click to expand</summary>
+<summary><b>Full package list (16 packages)</b> — click to expand</summary>
 
 | Package | Description |
 |---|---|
 | `@floatboat/nexus-core` | Editor engine — CM6 state, AST pipeline, live preview, events, widget API |
 | `@floatboat/nexus-react` | React binding — `useEditor` hook and `<Editor />` component |
 | `@floatboat/nexus-vue` | Vue 3 binding — `useEditor` composable |
+| `@floatboat/nexus-wc` | Web Component wrapper — framework-less `<nexus-editor>` custom element |
 | `@floatboat/nexus-preset-gfm` | GitHub Flavored Markdown preset (tables, strikethrough, task lists) |
+| `@floatboat/nexus-preset-bundle` | One-call `createDefaultPreset()` — curated ordered plugin stack |
+| `@floatboat/nexus-plugin-api` | Public plugin authoring surface (types + factories) |
+| `@floatboat/nexus-plugin-runtime` | Dynamic plugin runtime (contribution facets, lifecycle) |
 | `@floatboat/nexus-plugin-history` | Undo/redo with `Ctrl+Z` / `Ctrl+Shift+Z` |
 | `@floatboat/nexus-plugin-search` | Search and replace helpers |
 | `@floatboat/nexus-plugin-slash` | Slash command detection, ranking, and a vanilla-DOM floating menu UI |
@@ -180,6 +184,7 @@ A real Electron app with file IO, live preview, and every plugin enabled — the
 | `@floatboat/nexus-plugin-math` | Inline / block math rendering (KaTeX) |
 | `@floatboat/nexus-plugin-vim` | Vim keybindings powered by `@replit/codemirror-vim` |
 | `@floatboat/nexus-plugin-wordcount` | Markdown-aware word / character / CJK / reading-time stats + ARIA-live status bar |
+| `@floatboat/nexus-reference-plugins` | Reference implementations of core plugins |
 
 </details>
 
@@ -198,6 +203,8 @@ A real Electron app with file IO, live preview, and every plugin enabled — the
 ---
 
 ## 📖 API Reference
+
+Full developer docs: **[Docs Home](./docs/overview.md)** · [Getting Started](./docs/getting-started.md) · [API Reference](./docs/API.md) · [Showcase](./SHOWCASE.md)
 
 Plugin platform documentation (Chinese): [native plugin API](./docs/plugins/native-plugin-api.zh.md) · [Obsidian migration matrix](./docs/plugins/obsidian-migration.zh.md) · [legacy migration](./docs/plugins/legacy-plugin-migration.zh.md) · [events and security boundaries](./docs/plugins/security-and-events.zh.md)
 
@@ -322,7 +329,7 @@ We'd love your help — whether it's a typo fix, a new plugin, or a deep core ch
 ### Spread the word
 
 - 🐦 **Tweet about it** — tag us, we'll retweet
-- 📝 **Blog about your integration** — open a PR to list it in `SHOWCASE.md`
+- 📝 **Blog about your integration** — open a PR to list it in [`SHOWCASE.md`](./SHOWCASE.md)
 - 💬 **Share in your team's Slack / Discord** — that's how 90% of devs discover tools
 - 🐛 **Open an issue** if something feels off — even "this is confusing" is valuable feedback
 

@@ -687,6 +687,125 @@ export function replaceAllMatches(
   return doc.replace(pattern, replacement);
 }
 
+export interface FuzzyScoreOptions {
+  caseSensitive?: boolean;
+}
+
+const FUZZY_NO_MATCH = Number.NEGATIVE_INFINITY;
+
+function fuzzyCharEqual(a: string, b: string, caseSensitive: boolean): boolean {
+  if (caseSensitive) return a === b;
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+function isWordBoundary(text: string, index: number): boolean {
+  if (index <= 0) return true;
+  const prev = text.charAt(index - 1);
+  const cur = text.charAt(index);
+  const wordChar = /[A-Za-z0-9_]/.test(cur);
+  if (!wordChar) return false;
+  if (!/[A-Za-z0-9_]/.test(prev)) return true;
+  const prevIsUpper = prev >= "A" && prev <= "Z";
+  const curIsUpper = cur >= "A" && cur <= "Z";
+  if (!prevIsUpper && curIsUpper) return true;
+  return false;
+}
+
+/**
+ * Recursive scoring for a fuzzy subsequence alignment. Rewards aligned
+ * characters (zero gap), word-boundary starts, and CamelCase transitions;
+ * penalizes spread (non-consecutive) matches. Returns the highest score, or
+ * {@link FUZZY_NO_MATCH} when no in-order subsequence exists.
+ */
+function fuzzyScoreImpl(
+  query: string,
+  text: string,
+  caseSensitive: boolean,
+  queryIndex: number,
+  textIndex: number,
+  memo: Map<number, number>
+): number {
+  if (queryIndex >= query.length) return 0;
+  if (textIndex >= text.length) return FUZZY_NO_MATCH;
+
+  const key = queryIndex * text.length + textIndex;
+  const cached = memo.get(key);
+  if (cached !== undefined) return cached;
+
+  const qChar = query.charAt(queryIndex);
+  let best = FUZZY_NO_MATCH;
+
+  for (let i = textIndex; i < text.length; i++) {
+    if (!fuzzyCharEqual(qChar, text.charAt(i), caseSensitive)) continue;
+
+    const boundaryBonus = isWordBoundary(text, i) ? 8 : 0;
+    const gapPenalty = i - textIndex; // 0 when the previous char aligned right before
+    const rest = fuzzyScoreImpl(query, text, caseSensitive, queryIndex + 1, i + 1, memo);
+    if (rest === FUZZY_NO_MATCH) continue;
+
+    const score = boundaryBonus - gapPenalty + rest;
+    if (score > best) best = score;
+    // For the first query character, the earliest occurrence dominates later ones.
+    if (queryIndex === 0 && i === textIndex) break;
+  }
+
+  memo.set(key, best);
+  return best;
+}
+
+/**
+ * Score how well `query` matches `text` as a fuzzy subsequence. Higher is better.
+ * Returns {@link Number.NEGATIVE_INFINITY} when the characters cannot be matched
+ * in order.
+ */
+export function fuzzyScore(query: string, text: string, options: FuzzyScoreOptions = {}): number {
+  if (!query || !text) return FUZZY_NO_MATCH;
+  return fuzzyScoreImpl(query, text, options.caseSensitive ?? false, 0, 0, new Map());
+}
+
+/**
+ * Find fuzzy (subsequence) matches of `query` within `doc`, in document order.
+ * Each match spans from the first to the last matched character of the greedy
+ * in-order subsequence (each query character is matched at its first occurrence).
+ */
+export function findFuzzyMatches(
+  doc: string,
+  query: string,
+  options: FuzzyScoreOptions = {}
+): SearchMatch[] {
+  if (!query || !doc) return [];
+  if (!query.trim()) return [];
+
+  const caseSensitive = options.caseSensitive ?? false;
+  const matches: SearchMatch[] = [];
+
+  for (let start = 0; start < doc.length; ) {
+    // Find the earliest in-order subsequence using a greedy scan, tracking the
+    // widest extent so we can emit a bounded match.
+    let qi = 0;
+    let from = -1;
+    let to = -1;
+    for (let i = start; i < doc.length; i++) {
+      if (fuzzyCharEqual(query.charAt(qi), doc.charAt(i), caseSensitive)) {
+        if (from < 0) from = i;
+        to = i + 1;
+        qi++;
+        if (qi >= query.length) break;
+      }
+    }
+    if (qi < query.length) break;
+
+    matches.push({
+      from: from!,
+      to: to!,
+      text: doc.slice(from!, to!)
+    });
+    start = to;
+  }
+
+  return matches;
+}
+
 function resolveLabel(
   view: EditorView,
   labels: Partial<SearchPluginLabels> | undefined,

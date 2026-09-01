@@ -199,6 +199,8 @@ pnpm dev:electron-demo
 
 ## 📖 API 参考
 
+完整开发者文档：**[文档首页](./docs/overview.md)** · [快速上手](./docs/getting-started.zh.md) · [API 参考](./docs/API.md) · [Showcase](./SHOWCASE.md)
+
 插件平台文档：[原生插件 API](./docs/plugins/native-plugin-api.zh.md) · [Obsidian 迁移差异](./docs/plugins/obsidian-migration.zh.md) · [legacy 渐进迁移](./docs/plugins/legacy-plugin-migration.zh.md) · [事件与安全边界](./docs/plugins/security-and-events.zh.md)
 
 <details>
@@ -322,7 +324,7 @@ pnpm dev:electron-demo
 ### 帮忙传播
 
 - 🐦 **发推 / 发微博** —— 带上我们，我们会转
-- 📝 **写一篇你的集成博客** —— 提个 PR 把它列进 `SHOWCASE.md`
+- 📝 **写一篇你的集成博客** —— 提个 PR 把它列进 [`SHOWCASE.md`](./SHOWCASE.md)
 - 💬 **分享到团队的 Slack / Discord / 飞书 / 群** —— 90% 的开发者是这么发现工具的
 - 🐛 **觉得哪里不对就开 issue** —— 哪怕是"这里看不懂"，对我们也很有价值
 

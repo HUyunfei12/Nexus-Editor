@@ -8,6 +8,12 @@ importers:
 
   .:
     devDependencies:
+      '@axe-core/playwright':
+        specifier: ^4.13.0
+        version: 4.13.0(playwright-core@1.62.1)
+      '@playwright/test':
+        specifier: ^1.62.1
+        version: 1.62.1
       '@testing-library/react':
         specifier: ^16.3.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -29,6 +35,9 @@ importers:
       jsdom:
         specifier: ^25.0.1
         version: 25.0.1
+      playwright:
+        specifier: ^1.62.1
+        version: 1.62.1
       react:
         specifier: ^19.2.0
         version: 19.2.5
@@ -282,6 +291,36 @@ importers:
         specifier: ^11.0.5
         version: 11.0.5
 
+  packages/preset-bundle:
+    dependencies:
+      '@floatboat/nexus-core':
+        specifier: workspace:*
+        version: link:../core
+      '@floatboat/nexus-plugin-history':
+        specifier: workspace:*
+        version: link:../plugin-history
+      '@floatboat/nexus-plugin-math':
+        specifier: workspace:*
+        version: link:../plugin-math
+      '@floatboat/nexus-plugin-search':
+        specifier: workspace:*
+        version: link:../plugin-search
+      '@floatboat/nexus-plugin-slash':
+        specifier: workspace:*
+        version: link:../plugin-slash
+      '@floatboat/nexus-plugin-toolbar':
+        specifier: workspace:*
+        version: link:../plugin-toolbar
+      '@floatboat/nexus-plugin-vim':
+        specifier: workspace:*
+        version: link:../plugin-vim
+      '@floatboat/nexus-plugin-wordcount':
+        specifier: workspace:*
+        version: link:../plugin-wordcount
+      '@floatboat/nexus-preset-gfm':
+        specifier: workspace:*
+        version: link:../preset-gfm
+
   packages/preset-gfm:
     dependencies:
       '@floatboat/nexus-core':
@@ -345,6 +384,12 @@ importers:
         specifier: ^3.5.22
         version: 3.5.32(typescript@5.9.3)
 
+  packages/wc:
+    dependencies:
+      '@floatboat/nexus-core':
+        specifier: workspace:*
+        version: link:../core
+
 packages:
 
   7zip-bin@5.2.0:
@@ -355,6 +400,11 @@ packages:
 
   '@asamuzakjp/css-color@3.2.0':
     resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
+
+  '@axe-core/playwright@4.13.0':
+    resolution: {integrity: sha512-6YLx+kxXu5GJceG4ozFg+33a2EMTdjYwWGloJ3sb9Kta5pp+ZNS53uxGVog5JetIY8s++P5UrtX+cri+u0VAVg==}
+    peerDependencies:
+      playwright-core: '>= 1.0.0'
 
   '@babel/code-frame@7.29.0':
     resolution: {integrity: sha512-9NhCeYjq9+3uxgdtp20LSiJXJvN0FeCtNGpJxuMFZ1Kv3cWUNb6DOhJwUvcVCzKGR66cw4njwM6hrJLqgOwbcw==}
@@ -1018,6 +1068,11 @@ packages:
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
 
+  '@playwright/test@1.62.1':
+    resolution: {integrity: sha512-DTcUc8qii+cpHvtOwggMtBRMjKZHXYWdw8syRYu2vtzuq4Wxphqq4NfCs5Zt44L6mA8rfDfj+PHnxFc/FeK6mQ==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   '@replit/codemirror-indentation-markers@6.5.3':
     resolution: {integrity: sha512-hL5Sfvw3C1vgg7GolLe/uxX5T3tmgOA3ZzqlMv47zjU1ON51pzNWiVbS22oh6crYhtVhv8b3gdXwoYp++2ilHw==}
     peerDependencies:
@@ -1428,6 +1483,7 @@ packages:
   '@xmldom/xmldom@0.8.13':
     resolution: {integrity: sha512-KRYzxepc14G/CEpEGc3Yn+JKaAeT63smlDr+vjB8jRfgTBBI9wRj/nkQEO+ucV8p8I9bfKLWp37uHgFrbntPvw==}
     engines: {node: '>=10.0.0'}
+    deprecated: this version has critical issues, please update to the latest version
 
   abbrev@1.1.1:
     resolution: {integrity: sha512-nne9/IiQ/hzIhY6pdDnbBtz7DjPTKrY00P/zvPSm5pOFkl6xuGrGnXn/VtTNNfNtAfZ9/1RtehkszU9qcTii0Q==}
@@ -1549,6 +1605,10 @@ packages:
   at-least-node@1.0.0:
     resolution: {integrity: sha512-+q/t7Ekv1EDY2l6Gda6LLiX14rU9TV20Wa3ofeQmwPFZbOMo9DXrLbOjFaaclkXKWidIaopwAObQDqwWtGUjqg==}
     engines: {node: '>= 4.0.0'}
+
+  axe-core@4.13.0:
+    resolution: {integrity: sha512-UzGt8zg7Ny8djbYMhxl2zuEevVa7r2gJjYY5Lwr1xM7+XU2nd6CkIWFTVcCIbAP63vSz71NaVyyuSk9lHKcy0A==}
+    engines: {node: '>=4'}
 
   bail@2.0.2:
     resolution: {integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==}
@@ -2255,6 +2315,11 @@ packages:
 
   fs.realpath@1.0.0:
     resolution: {integrity: sha512-OO0pH2lK6a0hZnAdau5ItzHPI6pUlvI7jMVnxUQRtw4owF2wk8lOSabtGDCTP4Ggrg2MbGnWO9X8K1t4+fGMDw==}
+
+  fsevents@2.3.2:
+    resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
+    engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
+    os: [darwin]
 
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
@@ -3031,6 +3096,16 @@ packages:
 
   pkg-types@1.3.1:
     resolution: {integrity: sha512-/Jm5M4RvtBFVkKWRu2BLUTNP8/M2a+UwuAX+ae4770q1qVGtfjG+WTCupoZixokjmHiry8uI+dlY8KXYV5HVVQ==}
+
+  playwright-core@1.62.1:
+    resolution: {integrity: sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.62.1:
+    resolution: {integrity: sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   plist@3.1.0:
     resolution: {integrity: sha512-uysumyrvkUX0rX/dEVqt8gC3sTBzd4zoWfLeS29nb53imdaXVvLINYXTI2GNqzaMuvacNx4uJQ8+b3zXR0pkgQ==}
@@ -3821,6 +3896,11 @@ snapshots:
       '@csstools/css-tokenizer': 3.0.4
       lru-cache: 10.4.3
 
+  '@axe-core/playwright@4.13.0(playwright-core@1.62.1)':
+    dependencies:
+      axe-core: 4.13.0
+      playwright-core: 1.62.1
+
   '@babel/code-frame@7.29.0':
     dependencies:
       '@babel/helper-validator-identifier': 7.28.5
@@ -4365,6 +4445,10 @@ snapshots:
 
   '@pkgjs/parseargs@0.11.0':
     optional: true
+
+  '@playwright/test@1.62.1':
+    dependencies:
+      playwright: 1.62.1
 
   '@replit/codemirror-indentation-markers@6.5.3(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.41.0)':
     dependencies:
@@ -4945,6 +5029,8 @@ snapshots:
   asynckit@0.4.0: {}
 
   at-least-node@1.0.0: {}
+
+  axe-core@4.13.0: {}
 
   bail@2.0.2: {}
 
@@ -5816,6 +5902,9 @@ snapshots:
       minipass: 3.3.6
 
   fs.realpath@1.0.0: {}
+
+  fsevents@2.3.2:
+    optional: true
 
   fsevents@2.3.3:
     optional: true
@@ -6853,6 +6942,14 @@ snapshots:
       confbox: 0.1.8
       mlly: 1.8.2
       pathe: 2.0.3
+
+  playwright-core@1.62.1: {}
+
+  playwright@1.62.1:
+    dependencies:
+      playwright-core: 1.62.1
+    optionalDependencies:
+      fsevents: 2.3.2
 
   plist@3.1.0:
     dependencies:

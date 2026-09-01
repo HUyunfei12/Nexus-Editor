@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nexus-Editor E2E Harness</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        padding: 16px;
+        box-sizing: border-box;
+        font-family: system-ui, sans-serif;
+      }
+      #editor {
+        width: 720px;
+        height: 480px;
+        border: 1px solid #ccc;
+        flex: none;
+      }
+      #readout {
+        font: 12px/1.6 ui-monospace, monospace;
+        white-space: pre-wrap;
+        max-height: 200px;
+        overflow: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="editor"></div>
+    <pre id="readout" aria-label="editor value readout"></pre>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -25,7 +25,7 @@
 | 2  | whole-word 匹配 | `plugin-search` | P1 | done | 否 | 经 `buildSearchPattern` 的 `wholeWord` 选项，使用 `\b` 边界 |
 | 15 | 正则搜索 | `plugin-search` | P1 | done | 否 | `regexp` 选项与 whole-word 一并落地；非法正则有保护 |
 | 16 | 历史命令 / 搜索记忆 | `plugin-search` + `plugin-slash` | P2 | done | 是 | 宿主注入式存储（不隐式写 localStorage）—— `add-search-query-history` + `add-slash-recent-command-history` |
-| 17 | 模糊搜索 | `plugin-search` | P2 | planned | 否 | 评估 fzf-like 算法 vs. 第三方 lib；需带回溯的匹配器 |
+| 17 | 模糊搜索 | `plugin-search` | P2 | done | 否 | `findFuzzyMatches` + `fuzzyScore` —— fzf 风格子序列匹配器，连续命中 / CamelCase 加分（`openspec/changes/add-fuzzy-search`） |
 | 3  | Slash 命令排序与 limit | `plugin-slash` | P0 | done | 是 | 与浮层菜单 UI 一并落地 —— 见 `openspec/changes/add-slash-menu-ui` |
 | 27 | Slash 命令浮层菜单 UI | `plugin-slash` + `electron-demo` | P0 | done | 是 | `createSlashMenuUI(editor, options)` —— 见 `openspec/changes/add-slash-menu-ui` |
 
@@ -75,8 +75,10 @@
 | # | 功能 | 归属包 | 优先级 | 状态 | 需要 OpenSpec | 备注 |
 |---|---|---|---|---|---|---|
 | 21 | Electron 打包优化 | `apps/electron-demo` | P1 | planned | 否 | 关注体积、启动时长、autoUpdater |
-| 22 | Web Component / iframe 封装 | 新包 `wc` | P2 | planned | 是 | 与 React/Vue SDK 共享 core 实例 |
+| 22 | Web Component / iframe 封装 | 包 `wc` | P2 | done | 是 | `<nexus-editor>` 自定义元素：`value` 属性、`change`/`ready` 事件、`getEditor()`（`openspec/changes/add-ecosystem-packages`） |
 | 23 | 云端存储接口 | `core`（storage 适配层） | P2 | planned | 是 | 抽象 NoteVault interface，多后端实现 |
+| 24 | 聚合默认预设 | 包 `preset-bundle` | P2 | done | 是 | `createDefaultPreset()` 组装有序插件栈（`openspec/changes/add-ecosystem-packages`） |
+| 25 | MDX 支持 | `core` + 分析 | P3 | research | 是 | 可行性评估见 `docs/mdx-support-analysis.md`；实现前先经技术选型 design doc |
 
 ## 9. 开发体验
 
